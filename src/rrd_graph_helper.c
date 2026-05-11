@@ -1765,6 +1765,10 @@ static int parse_tick(
     dprintf("XAXIS : %i\n", gdp->xaxisidx);
     dprintf("YAXIS : %i\n", gdp->yaxisidx);
     dprintf("=================================\n");
+
+    /* shift the legend by 2 spaces for the "coloured-box"*/
+    legend_shift(gdp->legend);
+
     /* and return */
     return 0;
 }
