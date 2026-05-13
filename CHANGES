@@ -23,6 +23,11 @@ Features
 --------
 * Add Georgian translation @NorwayFun
 * Add -S short option for --step in rrdtool xport @somethingwithproof fixes #1310
+* Automated release workflow: a single workflow_dispatch on master computes
+  the next SemVer, bumps version strings in-place, builds source tarball +
+  Windows MSVC zips + RPM (AlmaLinux) + DEB (Ubuntu/Debian) — the binary
+  packages install under /opt/rrdtool so they coexist with distro-maintained
+  rrdtool packages without touching the system. See .github/workflows/release.yml. @oetiker
 
 RRDtool 1.9.0 - 2024-07-29
 ==========================
