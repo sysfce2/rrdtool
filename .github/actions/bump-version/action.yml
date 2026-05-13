@@ -1,0 +1,28 @@
+---
+name: Bump version in working tree
+description: >
+  Apply a target version (and date) to all hard-coded version locations
+  in the source tree (VERSION, perl bindings, src/*.{h,c}, rrdtool.spec,
+  doc/rrdbuild.pod, win32/*.rc, win32/rrd_config.h) and rewrite CHANGES.
+  Idempotent — safe to run from every release job; the actual mutation
+  only happens once per release.
+
+inputs:
+  version:
+    description: New version, e.g. 1.9.1
+    required: true
+  date:
+    description: Release date, YYYY-MM-DD
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Apply version bump in-place
+      shell: bash
+      run: |
+        set -e
+        echo "${{ inputs.version }}" > VERSION
+        bash conftools/bump-version.sh "${{ inputs.version }}"
+        perl conftools/finalize-changes.pl \
+            "${{ inputs.version }}" "${{ inputs.date }}" CHANGES

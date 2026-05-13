@@ -1,0 +1,536 @@
+---
+name: Release
+
+# yamllint disable rule:line-length
+# yamllint disable-line rule:truthy
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: SemVer bump from the latest v* tag
+        type: choice
+        required: true
+        default: bugfix
+        options:
+          - bugfix
+          - feature
+          - major
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # check-ci: branch guard + assert that "Linux Build" and "Windows CI" both
+  # succeeded for the master HEAD commit. If a run is in progress for the same
+  # commit, wait up to 30 minutes for it to finish.
+  # ---------------------------------------------------------------------------
+  check-ci:
+    name: CI green on master HEAD
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Branch guard
+        run: |
+          if [ "${{ github.ref }}" != "refs/heads/master" ]; then
+            echo "::error::Releases must be dispatched from master (got ${{ github.ref }})"
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Verify required CI workflows succeeded
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -e
+          fail=0
+          for wf in "Linux Build" "Windows CI"; do
+            echo "::group::Checking '$wf' for commit $SHA"
+
+            # Wait for any in-progress run for this commit.
+            run_id=$(gh run list --repo "$GITHUB_REPOSITORY" \
+                       --workflow="$wf" --branch=master --commit="$SHA" \
+                       --status=in_progress --limit=1 \
+                       --json databaseId -q '.[0].databaseId' || true)
+            if [ -n "$run_id" ]; then
+              echo "Run $run_id is in progress; waiting (timeout 30m)..."
+              timeout 1800 gh run watch --repo "$GITHUB_REPOSITORY" \
+                  --interval 30 --exit-status "$run_id" || true
+            fi
+
+            ok=$(gh run list --repo "$GITHUB_REPOSITORY" \
+                   --workflow="$wf" --branch=master --commit="$SHA" \
+                   --status=success --limit=1 \
+                   --json conclusion -q '.[0].conclusion' || true)
+            if [ "$ok" != "success" ]; then
+              url=$(gh run list --repo "$GITHUB_REPOSITORY" \
+                      --workflow="$wf" --branch=master --commit="$SHA" \
+                      --limit=1 --json url -q '.[0].url' || true)
+              echo "::error::'$wf' is not 'success' for $SHA. Latest run: ${url:-<none>}"
+              fail=1
+            else
+              echo "OK: '$wf' succeeded for $SHA"
+            fi
+            echo "::endgroup::"
+          done
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # compute-version: read latest v* tag, bump per release_type, emit outputs.
+  # Read-only — does not touch the working tree or push anything.
+  # ---------------------------------------------------------------------------
+  compute-version:
+    name: Compute new version
+    needs: check-ci
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.calc.outputs.version }}
+      tag: ${{ steps.calc.outputs.tag }}
+      date: ${{ steps.calc.outputs.date }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - id: calc
+        name: Compute next SemVer
+        env:
+          RELEASE_TYPE: ${{ inputs.release_type }}
+        run: |
+          set -e
+          LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+          LATEST=${LATEST:-v0.0.0}
+          IFS=. read -r MAJOR MINOR PATCH <<< "${LATEST#v}"
+          case "$RELEASE_TYPE" in
+            major)   NEW=$((MAJOR+1)).0.0 ;;
+            feature) NEW=${MAJOR}.$((MINOR+1)).0 ;;
+            bugfix)  NEW=${MAJOR}.${MINOR}.$((PATCH+1)) ;;
+            *) echo "::error::unknown release_type '$RELEASE_TYPE'"; exit 1 ;;
+          esac
+          DATE=$(date -u +"%Y-%m-%d")
+          echo "version=$NEW"  >> "$GITHUB_OUTPUT"
+          echo "tag=v$NEW"     >> "$GITHUB_OUTPUT"
+          echo "date=$DATE"    >> "$GITHUB_OUTPUT"
+          echo "Computed: v$NEW (date $DATE), previous tag $LATEST"
+
+  # ---------------------------------------------------------------------------
+  # build-source: bump in-place, ./bootstrap && ./configure && make dist.
+  # Produces rrdtool-X.Y.Z.tar.gz, the canonical source release artifact.
+  # ---------------------------------------------------------------------------
+  build-source:
+    name: Source tarball
+    needs: compute-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+              autopoint build-essential gettext libpango1.0-dev ghostscript
+
+      - name: Bump version in working tree
+        uses: ./.github/actions/bump-version
+        with:
+          version: ${{ needs.compute-version.outputs.version }}
+          date: ${{ needs.compute-version.outputs.date }}
+
+      - name: Build source tarball
+        run: |
+          set -e
+          ./bootstrap
+          ./configure
+          make dist
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: source-tarball
+          path: rrdtool-${{ needs.compute-version.outputs.version }}.tar.gz
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # build-windows: per-arch MSVC build via vcpkg + nmake. Produces a zip per
+  # configuration. Same matrix as the previous release-windows.yml.
+  # ---------------------------------------------------------------------------
+  build-windows:
+    name: Windows MSVC ${{ matrix.configuration }}
+    needs: compute-version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [windows-2022]
+        vcpkg_triplet: [x64-windows, x86-windows]
+        include:
+          - os: windows-2022
+            vcpkg_triplet: x64-windows
+            vcpkgCommitId: '84bab45d415d22042bd0b9081aea57f362da3f35'
+            vcpkgPackages: 'cairo expat fontconfig freetype gettext glib libpng libxml2 pango pcre zlib'
+            configuration: 'x64'
+            nmake_configuration: 'USE_64BIT=1'
+          - os: windows-2022
+            vcpkg_triplet: x86-windows
+            vcpkgCommitId: '84bab45d415d22042bd0b9081aea57f362da3f35'
+            vcpkgPackages: 'cairo expat fontconfig freetype gettext glib libpng libxml2 pango pcre zlib'
+            configuration: 'x86'
+            nmake_configuration: ''
+    env:
+      buildDir: '${{ github.workspace }}/build/'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - name: Bump version in working tree
+        uses: ./.github/actions/bump-version
+        with:
+          version: ${{ needs.compute-version.outputs.version }}
+          date: ${{ needs.compute-version.outputs.date }}
+
+      - name: vcpkg build
+        uses: johnwason/vcpkg-action@v7
+        id: vcpkg
+        with:
+          pkgs: '${{ matrix.vcpkgPackages }}'
+          triplet: ${{ matrix.vcpkg_triplet }}
+          cache-key: ${{ matrix.configuration }}
+          revision: '${{ matrix.vcpkgCommitId }}'
+          token: ${{ github.token }}
+
+      - name: Build ${{ matrix.configuration }}
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.configuration }}
+          nmake -f win32\Makefile_vcpkg.msc ${{ matrix.nmake_configuration }}
+
+      - name: Collect files
+        shell: cmd
+        run: |
+          win32\collect_rrdtool_vcpkg_files.bat ${{ matrix.configuration }}
+
+      - name: Zip release tree
+        shell: bash
+        env:
+          VERSION: ${{ needs.compute-version.outputs.version }}
+          CFG: ${{ matrix.configuration }}
+        run: |
+          set -e
+          dir="win32/nmake_release_${CFG}_vcpkg/rrdtool-${VERSION}-${CFG}_vcpkg"
+          if [ ! -d "$dir" ]; then
+            echo "::error::Expected collected dir not found: $dir"
+            ls win32/nmake_release_${CFG}_vcpkg/ || true
+            exit 1
+          fi
+          zip="rrdtool-${VERSION}-${CFG}_vcpkg.zip"
+          (cd "$(dirname "$dir")" && 7z a -tzip "../../$zip" "$(basename "$dir")")
+          ls -l "$zip"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: windows-${{ matrix.configuration }}
+          path: rrdtool-${{ needs.compute-version.outputs.version }}-${{ matrix.configuration }}_vcpkg.zip
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # build-rpm: per-distro container, builds a .rpm via rpmbuild from the same
+  # source tarball that build-source ships.
+  # ---------------------------------------------------------------------------
+  build-rpm:
+    name: RPM (${{ matrix.image }})
+    needs: [compute-version, build-source]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - image: almalinux:9
+            tag: almalinux-9
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: Install bootstrap deps (git for checkout)
+        run: |
+          set -e
+          dnf install -y git-core perl
+
+      - uses: actions/checkout@v6
+
+      - name: Install build deps
+        run: |
+          set -e
+          dnf install -y epel-release
+          dnf install -y 'dnf-command(config-manager)' || true
+          dnf config-manager --set-enabled crb || true
+          dnf install -y \
+              rpm-build rpmdevtools \
+              gcc make autoconf automake libtool pkgconfig \
+              groff gettext gettext-devel intltool \
+              cairo-devel pango-devel \
+              freetype-devel libpng-devel zlib-devel \
+              libxml2-devel glib2-devel libdbi-devel \
+              perl-devel perl-ExtUtils-MakeMaker \
+              python3-devel \
+              tcl-devel \
+              lua-devel \
+              ruby ruby-devel
+
+      - name: Bump version in working tree
+        uses: ./.github/actions/bump-version
+        with:
+          version: ${{ needs.compute-version.outputs.version }}
+          date: ${{ needs.compute-version.outputs.date }}
+
+      - name: Build source tarball locally for rpmbuild input
+        run: |
+          set -e
+          ./bootstrap
+          ./configure
+          make dist
+
+      - name: Stage rpmbuild tree
+        env:
+          VERSION: ${{ needs.compute-version.outputs.version }}
+        run: |
+          set -e
+          rpmdev-setuptree
+          # Render the env helper into SOURCES (it's a static template, no
+          # substitutions needed today, but kept under a versioned filename so
+          # future templating is trivial).
+          install -m 0755 conftools/rrdtool-env.sh.in ~/rpmbuild/SOURCES/rrdtool-env.sh
+          # Substitute @VERSION@ in the spec, copy to SPECS.
+          sed "s/@VERSION@/${VERSION}/g" conftools/rrdtool-opt.spec \
+              > ~/rpmbuild/SPECS/rrdtool-opt.spec
+          # Move the source tarball into SOURCES.
+          mv "rrdtool-${VERSION}.tar.gz" ~/rpmbuild/SOURCES/
+
+      - name: rpmbuild
+        run: |
+          set -e
+          rpmbuild -ba ~/rpmbuild/SPECS/rrdtool-opt.spec
+
+      - name: Collect built rpm
+        env:
+          VERSION: ${{ needs.compute-version.outputs.version }}
+        run: |
+          set -e
+          mkdir -p out
+          # Copy only the binary rpm (not the src.rpm — design says binaries only)
+          cp ~/rpmbuild/RPMS/x86_64/rrdtool-${VERSION}-*.rpm out/
+          ls -l out/
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: rpm-${{ matrix.tag }}
+          path: out/*.rpm
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # build-deb: per-distro container, builds a .deb via fpm from a staged
+  # `make install DESTDIR=...` tree. No in-tree debian/ packaging needed.
+  # ---------------------------------------------------------------------------
+  build-deb:
+    name: DEB (${{ matrix.image }})
+    needs: [compute-version, build-source]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - image: ubuntu:22.04
+            tag: ubuntu-22.04
+            distro_tag: ubuntu22.04
+          - image: ubuntu:24.04
+            tag: ubuntu-24.04
+            distro_tag: ubuntu24.04
+          - image: debian:12
+            tag: debian-12
+            distro_tag: debian12
+    container:
+      image: ${{ matrix.image }}
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install bootstrap deps (git for checkout)
+        run: |
+          set -e
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates perl
+
+      - uses: actions/checkout@v6
+
+      - name: Install build deps + fpm
+        run: |
+          set -e
+          apt-get install -y --no-install-recommends \
+              build-essential autoconf automake libtool pkg-config \
+              gettext autopoint intltool groff dc \
+              libcairo2-dev libpango1.0-dev libxml2-dev libglib2.0-dev libdbi-dev \
+              libfreetype6-dev libpng-dev zlib1g-dev \
+              libperl-dev \
+              python3-dev python3-setuptools \
+              tcl-dev \
+              liblua5.1-0-dev \
+              ruby ruby-dev rubygems-integration
+          gem install --no-document fpm
+
+      - name: Bump version in working tree
+        uses: ./.github/actions/bump-version
+        with:
+          version: ${{ needs.compute-version.outputs.version }}
+          date: ${{ needs.compute-version.outputs.date }}
+
+      - name: Configure & install into stage/
+        run: |
+          set -e
+          ./bootstrap
+          ./configure \
+              --prefix=/opt/rrdtool \
+              --sysconfdir=/opt/rrdtool/etc \
+              --localstatedir=/opt/rrdtool/var \
+              --datarootdir=/opt/rrdtool/share \
+              --mandir=/opt/rrdtool/share/man \
+              --disable-static \
+              --with-pic
+          make
+          make install DESTDIR="$PWD/stage"
+
+      - name: Post-install touches (rpath + env helper)
+        run: |
+          set -e
+          # Bake rpath into librrd.pc for downstream consumers.
+          sed -i 's|^Libs: -L\${libdir} -lrrd$|Libs: -L${libdir} -lrrd -Wl,-rpath,${libdir}|' \
+              stage/opt/rrdtool/lib/pkgconfig/librrd.pc
+          # Install the sourceable env helper.
+          install -m 0755 conftools/rrdtool-env.sh.in stage/opt/rrdtool/bin/rrdtool-env.sh
+
+      - name: Build .deb with fpm
+        env:
+          VERSION: ${{ needs.compute-version.outputs.version }}
+          DISTRO_TAG: ${{ matrix.distro_tag }}
+        run: |
+          set -e
+          mkdir -p out
+          fpm -s dir -t deb \
+              -n rrdtool \
+              -v "$VERSION" \
+              --iteration "1~${DISTRO_TAG}" \
+              --license "GPL-2.0-or-later WITH FLOSS-exception-1.0" \
+              --maintainer "Tobias Oetiker <tobi@oetiker.ch>" \
+              --vendor "oss.oetiker.ch" \
+              --url "https://oss.oetiker.ch/rrdtool/" \
+              --description "Round Robin Database Tool (upstream /opt build). Source /opt/rrdtool/bin/rrdtool-env.sh to use." \
+              --depends "libcairo2" \
+              --depends "libpango-1.0-0" \
+              --depends "libxml2" \
+              --depends "libpng16-16" \
+              --depends "libfreetype6" \
+              --depends "libdbi1" \
+              --depends "zlib1g" \
+              --deb-no-default-config-files \
+              -p out/ \
+              -C stage opt
+          ls -l out/
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: deb-${{ matrix.tag }}
+          path: out/*.deb
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # publish: only job that mutates the repo. Runs only after every build job
+  # (and every matrix entry) has succeeded. Re-applies the version bump,
+  # commits + tags + pushes, then creates the GitHub Release with all artifacts.
+  # ---------------------------------------------------------------------------
+  publish:
+    name: Publish release
+    needs:
+      - compute-version
+      - build-source
+      - build-windows
+      - build-rpm
+      - build-deb
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Race check (master not advanced since check-ci)
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -e
+          git fetch origin master
+          ACTUAL=$(git rev-parse origin/master)
+          if [ "$ACTUAL" != "$EXPECTED_SHA" ]; then
+            echo "::error::origin/master moved during the release run."
+            echo "  expected: $EXPECTED_SHA"
+            echo "  actual:   $ACTUAL"
+            echo "Re-dispatch the workflow after reviewing the new commits."
+            exit 1
+          fi
+
+      - name: Bump version in working tree
+        uses: ./.github/actions/bump-version
+        with:
+          version: ${{ needs.compute-version.outputs.version }}
+          date: ${{ needs.compute-version.outputs.date }}
+
+      - name: Commit, tag, push
+        env:
+          NEW: ${{ needs.compute-version.outputs.version }}
+        run: |
+          set -e
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -u
+          git commit -m "release v$NEW"
+          git tag -a "v$NEW" -m "release v$NEW"
+          git push origin master --follow-tags
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v6
+        with:
+          path: dist
+          pattern: '*'
+          merge-multiple: true
+
+      - name: List collected artifacts
+        run: |
+          set -e
+          ls -lR dist/
+          test -n "$(ls dist/)" || { echo "::error::no artifacts collected"; exit 1; }
+
+      - name: Extract release notes from CHANGES
+        env:
+          VERSION: ${{ needs.compute-version.outputs.version }}
+        run: |
+          set -e
+          awk -v v="$VERSION" '
+            $0 ~ "^RRDtool " v " " { found=1 }
+            found && /^RRDtool / && $0 !~ "^RRDtool " v " " { exit }
+            found { print }
+          ' CHANGES > releasenotes
+          echo "----- release notes -----"
+          cat releasenotes
+          test -s releasenotes || { echo "::error::release notes empty"; exit 1; }
+
+      - name: Create GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: v${{ needs.compute-version.outputs.version }}
+          name: "RRDtool Version ${{ needs.compute-version.outputs.version }}"
+          bodyFile: releasenotes
+          artifacts: "dist/*"
+          discussionCategory: "Release Issues"
+          token: ${{ secrets.GITHUB_TOKEN }}
