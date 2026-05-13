@@ -33,11 +33,16 @@ Turn rrdtool's release into a single click in the GitHub Actions "Run workflow" 
 One new file, `.github/workflows/release.yml`. Job graph:
 
 ```
-check-ci ──► prepare ──► build-source ──┐
-                    ├──► build-windows ─┤
-                    ├──► build-rpm     ─┤
-                    └──► build-deb     ─┴──► create-release
+                    ┌─► build-source  ─┐
+                    ├─► build-windows ─┤
+check-ci ──► compute-version ─┤                  ├─► publish
+                    ├─► build-rpm     ─┤
+                    └─► build-deb     ─┘
 ```
+
+Every build job runs on its own GitHub Actions runner with its own checkout of the rrdtool-1.x repo. Each one independently runs `conftools/bump-version.sh "$NEW"` and the `CHANGES` rewrite against its working tree before building — these are idempotent, deterministic given the same input version, so all jobs end up with byte-identical bumped trees. No artifact-passing between build jobs.
+
+**The tag is created and pushed ONLY by the `publish` job, after every build has succeeded.** No `continue-on-error` anywhere. If any build fails, the workflow aborts and no release exists, no tag was pushed — the maintainer fixes the issue and re-dispatches; nothing to clean up.
 
 ### Inputs
 
@@ -65,106 +70,88 @@ Implementation: use `gh run list --workflow=<name> --branch=master --commit=$SHA
 
 Why a pre-flight API check instead of `workflow_run` chaining: `workflow_run` only fires on auto-dispatch from completed runs, which doesn't compose with `workflow_dispatch`. The API check is what gives a manual trigger the "must be green" property.
 
-### Job: `prepare`
+### Job: `compute-version`
 
-Needs: `check-ci`. Runs on `ubuntu-latest`. Permissions: `contents: write`.
+Needs: `check-ci`. Runs on `ubuntu-latest`. Read-only — does not modify any files or push anything. Just produces the new version string for downstream jobs.
 
-Steps:
+```bash
+LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+LATEST=${LATEST:-v0.0.0}
+IFS=. read -r MAJOR MINOR PATCH <<< "${LATEST#v}"
+case "${{ inputs.release_type }}" in
+  major)   NEW=$((MAJOR+1)).0.0 ;;
+  feature) NEW=${MAJOR}.$((MINOR+1)).0 ;;
+  bugfix)  NEW=${MAJOR}.${MINOR}.$((PATCH+1)) ;;
+esac
+```
 
-1. **Checkout** master with `fetch-depth: 0` so tags are available.
+Outputs: `version` (e.g. `1.9.1`), `tag` (e.g. `v1.9.1`), `date` (`YYYY-MM-DD`, captured here so all jobs use the same date even if they run across midnight).
 
-2. **Compute new version**:
+### Shared bump step (used by every build job)
 
-   ```bash
-   LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
-   LATEST=${LATEST:-v0.0.0}
-   IFS=. read -r MAJOR MINOR PATCH <<< "${LATEST#v}"
-   case "${{ inputs.release_type }}" in
-     major)   NEW=$((MAJOR+1)).0.0 ;;
-     feature) NEW=${MAJOR}.$((MINOR+1)).0 ;;
-     bugfix)  NEW=${MAJOR}.${MINOR}.$((PATCH+1)) ;;
-   esac
-   ```
+Each build job, immediately after checkout, runs the same bump-in-place block before building:
 
-   Outputs `version` (e.g. `1.9.1`) and `tag` (e.g. `v1.9.1`) for downstream jobs.
+```bash
+echo "$NEW" > VERSION
+./conftools/bump-version.sh "$NEW"
+# Rewrite CHANGES: rename leading master block to versioned, prepend
+# fresh empty master placeholder. Inlined perl script omitted here for
+# brevity — see "Finalize CHANGES" below.
+```
 
-3. **Write `VERSION`** with the new value.
-
-4. **Propagate the version** by calling `conftools/bump-version.sh "$NEW"`. This new script contains the perl substitutions currently inlined in `rrdtool-release` (lines 8–19):
-   - `bindings/perl-*/*.pm` — `$VERSION = NUMVERS;`
-   - `src/*.h`, `src/*.c` — `RRDtool X.Y.Z` strings and copyright year
-   - `rrdtool.spec` — `Version:` line
-   - `doc/rrdbuild.pod` — `rrdtool-X.Y.Z` references and `vX.Y.Z`
-   - `win32/*.rc` — copyright year
-   - `win32/rrd_config.h` — `PACKAGE_MAJOR`, `PACKAGE_MINOR`, `PACKAGE_REVISION`, `PACKAGE_VERSION`, `NUMVERS`
-
-   Extracting this into a script gives one tested code path for both CI and the local maintainer script. `rrdtool-release` is refactored to source it.
-
-5. **Finalize `CHANGES`**: rewrite the leading block
-
-   ```
-   RRDtool - master ...
-   ====================
-   Bugfixes
-   --------
-   ...
-   Features
-   --------
-   ...
-   ```
-
-   into
-
-   ```
-   RRDtool - master ...
-   ====================
-   Bugfixes
-   --------
-
-   Features
-   --------
-
-   RRDtool X.Y.Z - YYYY-MM-DD
-   ==========================
-   Bugfixes
-   --------
-   ...
-   Features
-   --------
-   ...
-   ```
-
-   That is: rename the existing master block's heading to the new version+date (with `=` underline matching title length), and prepend a fresh empty master block above it.
-
-   Implementation: a single perl `-0777` script that captures the master block's contents, writes the empty master block first, then the renamed version block with the captured contents. Small enough to inline in the workflow.
-
-6. **Commit, tag, push**:
-
-   ```bash
-   git config user.name "github-actions[bot]"
-   git config user.email "github-actions[bot]@users.noreply.github.com"
-   git add -u                            # only modified tracked files
-   git commit -m "release v$NEW"
-   git tag -a "v$NEW" -m "release v$NEW"
-   git push origin master --follow-tags
-   ```
-
-   `git add -u` stages only tracked files that the bump touched. `prepare` does not run `./bootstrap`, so there are no untracked build artifacts to accidentally include.
+Nothing is committed here; the modifications live only in the runner's working tree, get baked into whatever artifact the job produces, and are discarded when the runner is torn down. The actual commit-and-push happens once at the end, in `publish`.
 
 ### Job: `build-source`
 
-Needs: `prepare`. Runs on `ubuntu-latest`.
+Needs: `compute-version`. Runs on `ubuntu-latest`. Produces the canonical `rrdtool-X.Y.Z.tar.gz` release artifact.
 
-1. Checkout `${{ needs.prepare.outputs.tag }}`.
-2. Install build deps (same set as today's release-source.yml: `autopoint build-essential gettext libpango1.0-dev ghostscript`).
-3. `./bootstrap && ./configure && make dist`.
-4. Upload `rrdtool-X.Y.Z.tar.gz` as a workflow artifact named `source-tarball`.
+Steps:
 
-The "re-extract and rebuild from tarball" sanity check that `build-test-linux.yml` already performs on every push to master is not duplicated here — the CI gate guarantees it passed at master HEAD, and the release commit only changes version strings, so it cannot break the build.
+1. **Checkout** master (the same SHA `check-ci` validated).
+2. **Install build deps**: `autopoint build-essential gettext libpango1.0-dev ghostscript`.
+3. **Apply the version bump in-place** (not committed):
+   - Write `VERSION` with the new value.
+   - Run `conftools/bump-version.sh "$NEW"` — propagates version into `bindings/perl-*/*.pm`, `src/*.h`, `src/*.c`, `rrdtool.spec`, `doc/rrdbuild.pod`, `win32/*.rc`, `win32/rrd_config.h`. (Script is idempotent — running it twice with the same version is a no-op the second time.)
+   - **Finalize `CHANGES`**: rewrite the leading block
+     ```
+     RRDtool - master ...
+     ====================
+     Bugfixes
+     --------
+     ...
+     Features
+     --------
+     ...
+     ```
+     into
+     ```
+     RRDtool - master ...
+     ====================
+     Bugfixes
+     --------
+
+     Features
+     --------
+
+     RRDtool X.Y.Z - YYYY-MM-DD
+     ==========================
+     Bugfixes
+     --------
+     ...
+     Features
+     --------
+     ...
+     ```
+     A single perl `-0777` script captures the master block's contents, writes the empty master placeholder first, then the renamed version block. Small enough to inline in the workflow.
+
+4. **Build the tarball**: `./bootstrap && ./configure && make dist` — produces `rrdtool-X.Y.Z.tar.gz` containing the bumped sources.
+5. **Upload** `rrdtool-X.Y.Z.tar.gz` as a workflow artifact named `source-tarball`.
+
+The "re-extract and rebuild from tarball" sanity check that `build-test-linux.yml` already performs on every push to master is not duplicated here — the CI gate guarantees it passed at master HEAD, and the version-string-only bump cannot break the build.
 
 ### Job: `build-windows`
 
-Needs: `prepare`. Runs on `windows-2022` with the same matrix as today's `release-windows.yml`:
+Needs: `compute-version`. Runs on `windows-2022` with the same matrix as today's `release-windows.yml`:
 
 ```yaml
 matrix:
@@ -173,12 +160,15 @@ matrix:
 
 Steps:
 
-1. Checkout `${{ needs.prepare.outputs.tag }}` with `submodules: true`.
-2. `vcpkg build` (johnwason/vcpkg-action@v7) with the existing `vcpkgCommitId` `84bab45d415d22042bd0b9081aea57f362da3f35`.
-3. `nmake -f win32\Makefile_vcpkg.msc` with the matrix configuration.
-4. `win32\collect_rrdtool_vcpkg_files.bat ${{ matrix.configuration }}`.
-5. **New**: zip the collected `rrdtool-X.Y.Z-${{ matrix.configuration }}_vcpkg/` directory into `rrdtool-X.Y.Z-${{ matrix.configuration }}_vcpkg.zip` (today the workflow uploads the directory as a tree, which isn't a useful release artifact).
-6. Upload the zip as a workflow artifact named `windows-${{ matrix.configuration }}`.
+1. **Checkout** master.
+2. **Apply the shared bump step** (run `bump-version.sh` via the perl that already runs on Windows MSYS — or rewrite the script in pure perl). The MSVC build path then sees the updated `win32/rrd_config.h` etc.
+3. **`vcpkg build`** (johnwason/vcpkg-action@v7) with the existing `vcpkgCommitId` `84bab45d415d22042bd0b9081aea57f362da3f35`.
+4. **`nmake -f win32\Makefile_vcpkg.msc`** with the matrix configuration.
+5. **`win32\collect_rrdtool_vcpkg_files.bat ${{ matrix.configuration }}`**.
+6. **New**: zip the collected `rrdtool-X.Y.Z-${{ matrix.configuration }}_vcpkg/` directory into `rrdtool-X.Y.Z-${{ matrix.configuration }}_vcpkg.zip` (today the workflow uploads the directory as a tree, which isn't a useful release artifact).
+7. Upload the zip as a workflow artifact named `windows-${{ matrix.configuration }}`.
+
+`bump-version.sh` is shell+perl. The GitHub-hosted `windows-2022` runners ship Git Bash + perl, so a `bash conftools/bump-version.sh "$NEW"` step works from PowerShell or cmd by invoking bash. If that proves fragile, the script's perl substitutions get reimplemented in a `.pl` file callable directly — same logic, fewer shell layers.
 
 ### Shared build approach for `/opt` packages
 
@@ -246,15 +236,14 @@ After `make install` the staged tree is entirely under `stage/opt/rrdtool/`. **T
 
 ### Job: `build-rpm`
 
-Needs: `prepare`, `build-source`. Runs on `ubuntu-latest` with a distro container:
+Needs: `build-source`. Runs on `ubuntu-latest` with a distro container:
 
 ```yaml
 build-rpm:
-  needs: [prepare, build-source]
+  needs: build-source
   runs-on: ubuntu-latest
-  continue-on-error: true
   strategy:
-    fail-fast: false
+    fail-fast: true
     matrix:
       image: [almalinux:9]   # add almalinux:8 / fedora:latest later if needed
   container:
@@ -348,22 +337,23 @@ Steps in the job:
      lua-devel \
      ruby ruby-devel
    ```
-2. **Set up rpmbuild tree** (`rpmdev-setuptree`), substitute version into the spec, write the `rrdtool-env.sh` helper to `~/rpmbuild/SOURCES/`, copy the spec to `~/rpmbuild/SPECS/`, copy `source-tarball` to `~/rpmbuild/SOURCES/`.
-3. **`rpmbuild -bb ~/rpmbuild/SPECS/rrdtool-opt.spec`** — builds the binary RPM.
-4. **Collect** the `.rpm` from `~/rpmbuild/RPMS/x86_64/`. Filename has the dist tag (e.g. `rrdtool-1.9.1-1.el9.x86_64.rpm`) so multiple matrix entries don't collide.
-5. **Upload** as artifact `rpm-${{ matrix.image }}` (slashes stripped).
+2. **Checkout** master and apply the shared bump step.
+3. **Make the source tarball locally** (`./bootstrap && ./configure && make dist`) — `rpmbuild -ba` needs a tarball as input. Costs ~30s; cheaper than artifact-passing complexity.
+4. **Set up rpmbuild tree** (`rpmdev-setuptree`), render the env-helper template into `~/rpmbuild/SOURCES/rrdtool-env.sh`, substitute `@VERSION@` in `conftools/rrdtool-opt.spec` and copy to `~/rpmbuild/SPECS/`, move `rrdtool-X.Y.Z.tar.gz` to `~/rpmbuild/SOURCES/`.
+5. **`rpmbuild -ba ~/rpmbuild/SPECS/rrdtool-opt.spec`** — builds the binary RPM.
+6. **Collect** the `.rpm` from `~/rpmbuild/RPMS/x86_64/`. Filename has the dist tag (e.g. `rrdtool-1.9.1-1.el9.x86_64.rpm`) so multiple matrix entries don't collide.
+7. **Upload** as artifact `rpm-${{ matrix.image }}` (slashes stripped).
 
 ### Job: `build-deb`
 
-Needs: `prepare`, `build-source`. Runs on `ubuntu-latest` with a distro container:
+Needs: `build-source`. Runs on `ubuntu-latest` with a distro container:
 
 ```yaml
 build-deb:
-  needs: [prepare, build-source]
+  needs: build-source
   runs-on: ubuntu-latest
-  continue-on-error: true
   strategy:
-    fail-fast: false
+    fail-fast: true
     matrix:
       image: [ubuntu:22.04, ubuntu:24.04, debian:12]
   container:
@@ -390,8 +380,8 @@ Steps:
    gem install --no-document fpm
    ```
    (Build-dep list mirrors Debian's working set: `libpango1.0-dev` transitively pulls cairo, freetype, glib, png. Adding language `-dev` packages enables binding builds.)
-2. **Download `source-tarball` artifact.**
-3. **Extract and build** with the shared configure invocation (above), `make`, `make install DESTDIR=$PWD/stage`, plus the two post-install touches (rpath in `librrd.pc`, write `rrdtool-env.sh`).
+2. **Checkout** master and apply the shared bump step.
+3. **`./bootstrap`**, then **shared configure invocation** (above), `make`, `make install DESTDIR=$PWD/stage`, plus the two post-install touches (rpath rewrite in `librrd.pc`, render `rrdtool-env.sh` into `stage/opt/rrdtool/bin/`).
 4. **Run `fpm` to produce the `.deb`**:
    ```
    fpm -s dir -t deb -n rrdtool -v X.Y.Z \
@@ -417,16 +407,32 @@ Source /opt/rrdtool/bin/rrdtool-env.sh to use." \
 
 5. **Upload** as artifact `deb-${{ matrix.image }}` (slashes stripped). Resulting filename: `rrdtool_X.Y.Z-1~ubuntu22.04_amd64.deb`, etc.
 
-### Job: `create-release`
+### Job: `publish`
 
-Needs: `prepare`, `build-source`, `build-windows`, `build-rpm`, `build-deb`. Runs on `ubuntu-latest`. Permissions: `contents: write`.
+Needs: `compute-version`, `build-source`, `build-windows`, `build-rpm`, `build-deb`. Runs on `ubuntu-latest`. Permissions: `contents: write`.
 
-Since `build-rpm` and `build-deb` use `continue-on-error: true` (see "Failure-mode policy" below), this job runs even if one of those matrix entries failed. `if: always() && needs.build-source.result == 'success' && needs.build-windows.result == 'success'` enforces that the source and Windows builds must succeed.
+This is the **only** job that mutates the repo. It runs only after every preceding job has succeeded — including every matrix entry of `build-windows`, `build-rpm`, and `build-deb`. There is no `continue-on-error` anywhere and no `if: always()`. If a single matrix entry fails, `publish` doesn't run, no tag is pushed, no Release is created.
 
-1. Checkout the tag (sparse, just `CHANGES`).
-2. `actions/download-artifact@v6` with `pattern: '*'`, `merge-multiple: true`, into `dist/`. Collects `rrdtool-X.Y.Z.tar.gz`, the Windows zips, all successful `.rpm` files, and all successful `.deb` files.
-3. **Extract release notes** keyed on the version (not the first-three-lines heuristic the current workflow uses, which would now grab the empty master placeholder):
+Steps:
 
+1. **Checkout master** with full history.
+2. **Race check**: `git fetch && git rev-parse origin/master` — if it differs from `github.sha` (the SHA that `check-ci` validated and the build jobs derived from), abort. Someone pushed to master during the release; the maintainer reviews and re-dispatches.
+3. **Re-apply the version bump** that `build-source` applied to its own workspace:
+   - Write `VERSION` with the new value.
+   - Run `conftools/bump-version.sh "$NEW"`.
+   - Apply the `CHANGES` rewrite (same perl block as `build-source`).
+   This is idempotent — produces the same files `build-source` produced, so the committed tree exactly matches what's in the released tarball.
+4. **Commit, tag, push**:
+   ```bash
+   git config user.name "github-actions[bot]"
+   git config user.email "github-actions[bot]@users.noreply.github.com"
+   git add -u
+   git commit -m "release v$NEW"
+   git tag -a "v$NEW" -m "release v$NEW"
+   git push origin master --follow-tags
+   ```
+5. **Download all artifacts** with `actions/download-artifact@v6`, `pattern: '*'`, `merge-multiple: true`, into `dist/`. Collects `rrdtool-X.Y.Z.tar.gz`, the Windows zips, every `.rpm`, every `.deb`.
+6. **Extract release notes** from `CHANGES` keyed on the version:
    ```bash
    awk -v v="$VERSION" '
      $0 ~ "^RRDtool " v " " { found=1 }
@@ -434,19 +440,26 @@ Since `build-rpm` and `build-deb` use `continue-on-error: true` (see "Failure-mo
      found { print }
    ' CHANGES > releasenotes
    ```
-
-4. `ncipollo/release-action@v1` with:
-   - `tag: ${{ needs.prepare.outputs.tag }}`
+7. **Create GitHub Release** with `ncipollo/release-action@v1`:
+   - `tag: v${{ needs.compute-version.outputs.version }}`
    - `artifacts: "dist/*"`
    - `bodyFile: releasenotes`
    - `discussionCategory: "Release Issues"`
-   - `name: "RRDtool Version ${{ needs.prepare.outputs.version }}"`
+   - `name: "RRDtool Version ${{ needs.compute-version.outputs.version }}"`
 
-### Failure-mode policy for binary packages
+### Failure modes
 
-`build-rpm` and `build-deb` use **`continue-on-error: true`** at the job level, plus `fail-fast: false` in their matrices. Rationale: the source tarball is the canonical release; a missing apt mirror, an unexpected distro-specific binding-build failure (e.g. a Ruby `mkmf` quirk on Alma 9, a Tcl version mismatch on Ubuntu 24.04), or a transient container pull issue should not block a release the maintainer has explicitly green-lit. When an `.rpm` or `.deb` job fails, the Release still publishes with whatever binary packages succeeded, plus the source tarball and Windows artifacts. The failed job is visible in the workflow run, giving a clean signal for follow-up cleanup without blocking the release.
+| What fails | What state is left | Recovery |
+|---|---|---|
+| `check-ci` (CI not green on master HEAD) | None — nothing started | Maintainer fixes CI, re-dispatches release workflow |
+| `compute-version` | None — read-only job | Inspect log, fix, re-dispatch |
+| `build-source` | None — work in workflow runner only | Inspect log, fix, re-dispatch |
+| Any `build-windows` matrix entry | None — artifacts uploaded but not consumed | Inspect log, fix, re-dispatch |
+| Any `build-rpm` / `build-deb` matrix entry | None — same as above | Inspect log, fix, re-dispatch |
+| `publish` step 4 (git push) | None — no tag, no commit pushed | Re-dispatch |
+| `publish` step 7 (create release) | Tag pushed, no Release created | Re-dispatch; `ncipollo/release-action` is idempotent on existing tags and will create the missing Release. If preferred: delete the tag (`git push origin :v$NEW`) and re-dispatch from scratch. |
 
-`build-source` and `build-windows` do **not** get `continue-on-error` — those are the established artifacts users depend on. Their failure aborts the release.
+The race-window where things can go wrong is small: only between `git push` (step 4) and `create release` (step 7) within the same job, on the same runner. The release-action's idempotence on tag re-use makes step 7 safe to re-run.
 
 ## Files added / removed / changed
 
@@ -465,7 +478,7 @@ Since `build-rpm` and `build-deb` use `continue-on-error: true` (see "Failure-mo
 
 ## Edge cases & risks
 
-- **`workflow_dispatch` race with concurrent master pushes.** Between `check-ci` finishing and `prepare` pushing the release commit, someone could push to master. The release commit would still apply (it's a normal commit on top of HEAD-at-checkout), but the tag would point at a different commit than the one that passed CI. **Mitigation:** `prepare` re-checks `git rev-parse HEAD` matches the SHA `check-ci` validated; if not, abort. Cheap and removes the race.
+- **`workflow_dispatch` race with concurrent master pushes.** Someone could push to master between `check-ci` running and `publish` running. **Mitigation:** `publish` step 2 re-fetches origin and asserts `origin/master` still matches `github.sha`; if not, abort. Cheap and removes the race.
 
 - **Tag collision.** If `v$NEW` already exists (e.g., someone made a release out-of-band), `git tag` fails. The job aborts before pushing. Manual cleanup needed; not designed to auto-resolve.
 
@@ -473,7 +486,7 @@ Since `build-rpm` and `build-deb` use `continue-on-error: true` (see "Failure-mo
 
 - **Pipeline duration.** Windows MSVC build is ~10–15 min, RPM and DEB matrices run in parallel. Total release time ~15–20 min. Acceptable.
 
-- **The new `rrdtool-opt.spec` is minimal but untested in production.** First-run failures will surface real issues (missing BuildRequires, configure flag typos, RPM macro quirks). `continue-on-error: true` on `build-rpm` means these don't block the release. Same applies to `build-deb` (configure on a fresh Ubuntu/Debian container may surface a missing dep we didn't anticipate).
+- **The new `rrdtool-opt.spec` is minimal but untested in production.** First-run failures will surface real issues (missing BuildRequires, configure flag typos, RPM macro quirks). Because every job hard-fails the workflow, the maintainer will see these immediately and fix-then-re-dispatch — no half-published releases.
 
 - **`/opt`-install packages are non-canonical by design.** They're a single combined package, don't follow FHS, don't conflict with the distribution rrdtool. Distro-package users won't find them via `apt show rrdtool` or `dnf info rrdtool` because they're not the same package — different upstream channel. The GitHub Release body will include a short "Using the /opt packages" section explaining the env script.
 
@@ -481,7 +494,7 @@ Since `build-rpm` and `build-deb` use `continue-on-error: true` (see "Failure-mo
 
 - **Python binding directory varies by distro.** `AM_PATH_PYTHON` installs the module into `$prefix/lib/python$PYTHON_VERSION/site-packages`, where `$PYTHON_VERSION` is whatever Python the build container shipped (3.9 on Alma 9, 3.10/3.12 on Ubuntu 22.04/24.04, 3.11 on Debian 12). This is intentional: each package is built for a specific Python and the env script auto-discovers the versioned directory at use time.
 
-- **No rollback.** If `create-release` fails after `prepare` has pushed the tag, the tag stays. The maintainer deletes the tag (`git push origin :v$NEW`) and re-dispatches. The bumped commit on master stays — that's harmless; the version is what it is.
+- **Rollback is built-in by ordering.** Because the tag is only pushed in `publish` step 4, after every build has succeeded, there is no "build failed and we already published a half-release" scenario. The only edge case is if `publish` step 4 succeeds (tag pushed) and step 7 fails (Release-creation) — see "Failure modes" table above for the recovery path.
 
 ## Future cleanup (deferred)
 
