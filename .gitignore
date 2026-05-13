@@ -85,3 +85,6 @@ compile_commands.json
 /win32/Release
 /win32/ReleaseDLL
 /win32/Static\ Debug
+
+# superpowers / GSD working docs (specs, plans, etc.) — local-only
+/docs/superpowers/
