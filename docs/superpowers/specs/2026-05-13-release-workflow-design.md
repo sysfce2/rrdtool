@@ -10,14 +10,16 @@ Turn rrdtool's release into a single click in the GitHub Actions "Run workflow" 
 
 1. Refuse to run if CI is not green on `master` HEAD.
 2. Compute the new version, finalize `CHANGES`, propagate version strings into all source locations, commit, and tag — all without human edits.
-3. Produce the source tarball, the Windows MSVC binaries, RPM packages (AlmaLinux), and DEB packages (Ubuntu / Debian), all attached to a single GitHub Release with extracted release notes.
+3. Produce the source tarball, the Windows MSVC binaries, RPM packages (AlmaLinux), and DEB packages (Ubuntu / Debian) — the latter two targeting `/opt/rrdtool` so they coexist with distribution-maintained `rrdtool` packages — all attached to a single GitHub Release with extracted release notes.
 
 ## Constraints
 
 - **Master only.** Branches like `1.9` are no longer used. The workflow runs only when dispatched from `refs/heads/master`.
 - **CI is the gate.** A release must not happen if `Linux Build` or `Windows CI` failed on the commit at master HEAD.
 - **One Release, all artifacts.** Source tarball, MSVC x64/x86 zips, distro-tagged `.rpm` and `.deb` files, all attached to the same GitHub Release.
-- **Binary packages run in distro containers.** rrdtool's dependency tree (cairo, pango, libdbi, lua, tcl, ruby, perl, python, etc.) is too large to install on the host runner cleanly; per-distro containers isolate it.
+- **Binary packages run in distro containers.** rrdtool's dependency tree (cairo, pango, libdbi, etc.) is large; per-distro containers isolate it.
+- **`/opt/rrdtool` install prefix.** Our packages install into `/opt/rrdtool/` and do not touch `/usr/...`. They coexist with the distribution-maintained `rrdtool` packages — users can have both installed simultaneously. Neither the RPM `Conflicts:` header nor the DEB `Conflicts:` field is set, intentionally — both packages can be installed alongside the distro version.
+- **C-only build, no language bindings in packages.** Distros' rrdtool packages split bindings into language-native packages (`python3-rrdtool`, `librrds-perl`, `lua-rrd`, etc.) installed into FHS-canonical paths (`/usr/lib/python3/dist-packages/`, `@INC`). Our `/opt/rrdtool/lib/...` paths would not be on language search paths without per-user env setup, which makes shipping bindings under `/opt` more confusing than useful. The /opt build is `rrdtool`, `rrdupdate`, `rrdcgi`, `rrdcached`, `librrd.so`, headers, manpages — the C tooling, nothing else. Users wanting bindings install them from their distro or from CPAN/PyPI/gems.
 
 ## Non-goals
 
@@ -177,9 +179,41 @@ Steps:
 5. **New**: zip the collected `rrdtool-X.Y.Z-${{ matrix.configuration }}_vcpkg/` directory into `rrdtool-X.Y.Z-${{ matrix.configuration }}_vcpkg.zip` (today the workflow uploads the directory as a tree, which isn't a useful release artifact).
 6. Upload the zip as a workflow artifact named `windows-${{ matrix.configuration }}`.
 
+### Shared build approach for `/opt` packages
+
+Both RPM and DEB jobs follow the same shape, only differing in the packager invoked at the end. The shared configure invocation is:
+
+```bash
+./configure \
+  --prefix=/opt/rrdtool \
+  --sysconfdir=/opt/rrdtool/etc \
+  --localstatedir=/opt/rrdtool/var \
+  --datarootdir=/opt/rrdtool/share \
+  --mandir=/opt/rrdtool/share/man \
+  --disable-static \
+  --disable-rpath \
+  --disable-perl \
+  --disable-python \
+  --disable-ruby \
+  --disable-lua \
+  --disable-tcl \
+  --with-pic
+make
+make install DESTDIR="$PWD/stage"
+```
+
+After `make install` the staged tree contains only `stage/opt/rrdtool/...`. We then add an `ld.so.conf.d` snippet so the runtime linker finds `librrd.so`:
+
+```bash
+mkdir -p stage/etc/ld.so.conf.d
+echo "/opt/rrdtool/lib" > stage/etc/ld.so.conf.d/rrdtool-opt.conf
+```
+
+That's the only file outside `/opt/rrdtool/` we install. (Adding `/etc/profile.d/rrdtool-opt.sh` for `PATH` is tempting but invasive — users who want it can `ln -s /opt/rrdtool/bin/rrdtool /usr/local/bin/rrdtool` themselves. Skipping by default.)
+
 ### Job: `build-rpm`
 
-Needs: `prepare`, `build-source` (consumes the source tarball). Runs on `ubuntu-latest` with a distro container:
+Needs: `prepare`, `build-source`. Runs on `ubuntu-latest` with a distro container:
 
 ```yaml
 build-rpm:
@@ -194,29 +228,88 @@ build-rpm:
     image: ${{ matrix.image }}
 ```
 
-The existing `rrdtool.spec` is the seed. `rpmbuild -ta` extracts the source tarball, runs `%prep`, `%build`, `%install`, and produces a stack of binary RPMs (one per subpackage: main, devel, doc, perl, python, tcl, lua, ruby, cached).
+A new spec file `conftools/rrdtool-opt.spec` is added to the repo. It's deliberately minimal — none of the FHS gymnastics of the existing `rrdtool.spec`, no subpackage split, no PHP4. Sketch:
 
-Steps:
+```spec
+%global _prefix /opt/rrdtool
+%global _sysconfdir /opt/rrdtool/etc
+%global _localstatedir /opt/rrdtool/var
+%global _datarootdir /opt/rrdtool/share
+%global _mandir /opt/rrdtool/share/man
 
-1. Install build dependencies via `dnf`:
+Name:     rrdtool
+Version:  @VERSION@
+Release:  1%{?dist}
+Summary:  Round Robin Database Tool (upstream /opt build)
+License:  GPL-2.0-or-later WITH FLOSS-exception-1.0
+URL:      https://oss.oetiker.ch/rrdtool/
+Source0:  rrdtool-%{version}.tar.gz
+
+Prefix:   /opt/rrdtool
+AutoReq:  yes
+
+BuildRequires: gcc, make, autoconf, automake, libtool, pkgconfig
+BuildRequires: groff, gettext-devel, intltool
+BuildRequires: cairo-devel >= 1.2, pango-devel >= 1.14
+BuildRequires: freetype-devel, libpng-devel, zlib-devel, libxml2-devel
+BuildRequires: glib2-devel, libdbi-devel
+
+%description
+RRDtool is the OpenSource industry standard high performance data
+logging and graphing system for time series data.
+
+This package installs RRDtool under /opt/rrdtool so it does not
+conflict with the distribution-provided rrdtool package. Add
+/opt/rrdtool/bin to PATH (or symlink the binaries from /usr/local/bin)
+to use it. The shared library is registered via /etc/ld.so.conf.d.
+
+%prep
+%setup -q -n rrdtool-%{version}
+
+%build
+./configure \
+  --prefix=/opt/rrdtool \
+  --sysconfdir=/opt/rrdtool/etc \
+  --localstatedir=/opt/rrdtool/var \
+  --datarootdir=/opt/rrdtool/share \
+  --mandir=/opt/rrdtool/share/man \
+  --disable-static \
+  --disable-rpath \
+  --disable-perl --disable-python --disable-ruby --disable-lua --disable-tcl \
+  --with-pic
+make %{?_smp_mflags}
+
+%install
+make install DESTDIR=%{buildroot}
+mkdir -p %{buildroot}/etc/ld.so.conf.d
+echo "/opt/rrdtool/lib" > %{buildroot}/etc/ld.so.conf.d/rrdtool-opt.conf
+
+%post   -p /sbin/ldconfig
+%postun -p /sbin/ldconfig
+
+%files
+/opt/rrdtool
+/etc/ld.so.conf.d/rrdtool-opt.conf
+```
+
+`@VERSION@` is substituted at workflow time using `sed`. The spec lives in `conftools/` so `make dist` doesn't ship it inside the tarball (Fedora maintainers maintain their own spec; ours is for the /opt build only).
+
+Steps in the job:
+
+1. **Install build deps**:
    ```
    dnf install -y epel-release
-   dnf install -y --enablerepo=crb \
-     gcc gcc-c++ make autoconf automake libtool rpm-build groff \
-     gettext gettext-devel intltool \
-     openssl-devel freetype-devel libpng-devel zlib-devel \
-     cairo-devel pango-devel libxml2-devel glib2-devel libdbi-devel \
-     perl-devel perl-ExtUtils-MakeMaker \
-     python3-devel tcl-devel lua-devel ruby ruby-devel
+   dnf config-manager --set-enabled crb
+   dnf install -y \
+     rpm-build rpmdevtools gcc make autoconf automake libtool pkgconfig \
+     groff gettext gettext-devel intltool \
+     cairo-devel pango-devel freetype-devel libpng-devel zlib-devel \
+     libxml2-devel glib2-devel libdbi-devel
    ```
-   (`epel-release` and `--enablerepo=crb` give us `libdbi-devel` on Alma 9 — it's in CRB.)
-2. Download the `source-tarball` artifact.
-3. Move it into `~/rpmbuild/SOURCES/`.
-4. `rpmbuild --nodeps -ta --without php rrdtool-X.Y.Z.tar.gz`
-   - `--without php` skips the obsolete PHP4 bindings the spec still references.
-   - `--nodeps` is included because some `Requires:` (e.g. `dejavu-lgc-fonts`) may not be installable at build time; it's a build-time skip only.
-5. Collect resulting `.rpm` files (excluding `.src.rpm`) from `~/rpmbuild/RPMS/<arch>/`. The dist tag from rpmbuild (`.el9`, `.fc40`, etc.) already disambiguates filenames across distros.
-6. Upload as artifact `rpm-${{ matrix.image }}` (slashes stripped to e.g. `rpm-almalinux-9`).
+2. **Set up rpmbuild tree** (`rpmdev-setuptree`), substitute version into the spec, copy spec to `~/rpmbuild/SPECS/`, copy `source-tarball` to `~/rpmbuild/SOURCES/`.
+3. **`rpmbuild -bb ~/rpmbuild/SPECS/rrdtool-opt.spec`** — builds the binary RPM(s).
+4. **Collect** `.rpm` files from `~/rpmbuild/RPMS/x86_64/`. Filename has the dist tag (e.g. `rrdtool-1.9.1-1.el9.x86_64.rpm`) so multiple matrix entries don't collide.
+5. **Upload** as artifact `rpm-${{ matrix.image }}` (slashes stripped).
 
 ### Job: `build-deb`
 
@@ -235,39 +328,47 @@ build-deb:
     image: ${{ matrix.image }}
 ```
 
-The repo's `debian/` directory contains only a README — there is **no** Debian source packaging in-tree. So `dpkg-buildpackage` is not viable without significant new work. Instead we use **`fpm`** (Effing Package Management), the standard tool for converting a `make install DESTDIR=...` tree into a `.deb`. This produces a single-package `.deb` containing the binaries, libraries, headers, man pages, and language bindings together — without the subpackage split the RPM spec provides. That's acceptable for an upstream-provided package; downstream Debian maintainers maintain their own properly-split packaging.
+The repo's `debian/` directory contains only a README — there is no in-tree Debian source packaging, and the Debian Project maintains their own `/usr`-targeted source package separately on salsa.debian.org. For our `/opt` build we use **`fpm`** (Effing Package Management), the standard tool for converting a `make install DESTDIR=...` tree into a `.deb`.
 
 Steps:
 
-1. Install build deps + fpm:
+1. **Install build deps + fpm**:
    ```
    apt-get update
-   apt-get install -y build-essential autoconf automake libtool pkg-config \
-     gettext intltool groff \
+   apt-get install -y \
+     build-essential autoconf automake libtool pkg-config \
+     gettext intltool groff dc \
      libcairo2-dev libpango1.0-dev libxml2-dev libglib2.0-dev libdbi-dev \
      libfreetype6-dev libpng-dev zlib1g-dev \
-     libperl-dev python3-dev tcl-dev liblua5.1-0-dev ruby ruby-dev \
-     ruby-rubygems
+     ruby ruby-dev ruby-rubygems
    gem install --no-document fpm
    ```
-2. Download `source-tarball` artifact.
-3. Extract, `./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var --disable-static --with-pic`, `make`, `make install DESTDIR=$PWD/stage`.
-4. Run `fpm` to produce the `.deb`:
+   (Build-dep list mirrors Debian's working set: `libpango1.0-dev` transitively pulls cairo, freetype, glib, png.)
+2. **Download `source-tarball` artifact.**
+3. **Extract and build** with the shared configure invocation (above), `make`, `make install DESTDIR=$PWD/stage`, plus the `ld.so.conf.d` snippet.
+4. **Run `fpm` to produce the `.deb`**:
    ```
    fpm -s dir -t deb -n rrdtool -v X.Y.Z \
        --iteration 1~${DISTRO_TAG} \
-       --license "GPL-2.0-or-later with exceptions" \
+       --license "GPL-2.0-or-later WITH FLOSS-exception-1.0" \
        --maintainer "Tobias Oetiker <tobi@oetiker.ch>" \
        --vendor "oss.oetiker.ch" \
        --url "https://oss.oetiker.ch/rrdtool/" \
-       --description "Round Robin Database Tool" \
+       --description "Round Robin Database Tool (upstream /opt build)" \
        --depends "libcairo2" --depends "libpango-1.0-0" \
        --depends "libxml2" --depends "libpng16-16" \
        --depends "libfreetype6" --depends "libdbi1" \
-       -C stage usr
+       --after-install /tmp/ldconfig.sh \
+       --after-remove /tmp/ldconfig.sh \
+       -C stage opt etc
    ```
-   `DISTRO_TAG` is one of `ubuntu22.04`, `ubuntu24.04`, `debian12`, computed from `${{ matrix.image }}` so the iteration suffix marks which distro built it.
-5. Upload as artifact `deb-${{ matrix.image }}` (slashes stripped). Resulting filename: `rrdtool_X.Y.Z-1~ubuntu22.04_amd64.deb` etc.
+   `DISTRO_TAG` is one of `ubuntu22.04`, `ubuntu24.04`, `debian12` (derived from `${{ matrix.image }}`).
+
+   `/tmp/ldconfig.sh` is a one-liner created earlier in the job (`#!/bin/sh` + `/sbin/ldconfig`). It runs after install and after removal so the linker cache picks up `/opt/rrdtool/lib`.
+
+   **Note**: this `.deb` is intentionally non-canonical (single package, doesn't match Debian's split). It's an upstream/opt package. Users wanting the FHS-compliant split layout use the Debian-maintained packages.
+
+5. **Upload** as artifact `deb-${{ matrix.image }}` (slashes stripped). Resulting filename: `rrdtool_X.Y.Z-1~ubuntu22.04_amd64.deb`, etc.
 
 ### Job: `create-release`
 
@@ -308,10 +409,11 @@ Since `build-rpm` and `build-deb` use `continue-on-error: true` (see "Failure-mo
 | `.github/workflows/release-source.yml` | **delete** — folded into `release.yml`; the `push: tags` trigger is no longer needed because tags only come from `release.yml` itself |
 | `.github/workflows/release-windows.yml` | **delete** — folded into `release.yml`; the `push: tags` trigger likewise disappears. The CI smoke build for MSVC stays in `ci-workflow.yml` |
 | `conftools/bump-version.sh` | **new** — version-propagation logic extracted from `rrdtool-release` |
+| `conftools/rrdtool-opt.spec` | **new** — RPM spec for the `/opt/rrdtool` build (separate from the legacy `rrdtool.spec` which is FHS-targeted and unused by the new workflow) |
 | `rrdtool-release` | **refactor** — call `conftools/bump-version.sh` for the propagation step; SCP-to-james and local sanity build stay intact for the maintainer's local workflow |
 | `docs/superpowers/specs/2026-05-13-release-workflow-design.md` | **new** — this document |
 
-`build-test-linux.yml`, `ci-workflow.yml`, `code-coverage.yml`, `codeql-analysis.yml` are not touched. `rrdtool.spec` and `debian/` are not touched in this iteration (the spec is dated and may need fixes that surface from the first `build-rpm` run, but those can come as follow-ups).
+`build-test-linux.yml`, `ci-workflow.yml`, `code-coverage.yml`, `codeql-analysis.yml` are not touched. The legacy `rrdtool.spec` and empty `debian/` directory are left untouched — they remain for historical reference and any downstream user who may still be consuming the old spec. They are explicitly not the basis for the new packaging.
 
 ## Edge cases & risks
 
@@ -323,9 +425,11 @@ Since `build-rpm` and `build-deb` use `continue-on-error: true` (see "Failure-mo
 
 - **Pipeline duration.** Windows MSVC build is ~10–15 min, RPM and DEB matrices run in parallel. Total release time ~15–20 min. Acceptable.
 
-- **`rrdtool.spec` is dated.** It hasn't been touched recently and may produce build warnings or fail outright on AlmaLinux 9. `continue-on-error: true` on `build-rpm` means a failure here doesn't block the release; the issue gets surfaced for follow-up. Same applies to `build-deb`.
+- **The new `rrdtool-opt.spec` is minimal but untested in production.** First-run failures will surface real issues (missing BuildRequires, configure flag typos, RPM macro quirks). `continue-on-error: true` on `build-rpm` means these don't block the release. Same applies to `build-deb` (configure on a fresh Ubuntu/Debian container may surface a missing dep we didn't anticipate).
 
-- **`fpm`-built `.deb` is non-canonical.** It's a single combined package, not the split-package layout Debian users expect from `apt`. This is upstream's package, not Debian's. Anyone wanting a "proper" Debian package uses the Debian-maintained archive. Documenting this in the GitHub Release description is worthwhile (future work, low priority).
+- **`/opt`-install packages are non-canonical by design.** They're a single combined package, don't follow FHS, don't conflict with the distribution rrdtool. Distro-package users won't find them via `apt show rrdtool` or `dnf info rrdtool` because they're not the same package — different upstream channel. Documenting this in the GitHub Release description is worthwhile (future work, low priority).
+
+- **No language bindings in `/opt` packages.** Users wanting Perl/Python/Tcl/Lua/Ruby bindings install them from their distro packages or from CPAN/PyPI/gems. Those bindings link against the distro's `librrd`, not ours — which is fine because the C library ABI is stable across these point versions. If someone needs upstream bindings against the upstream library, they build from source. Adding binding packages later is a feasible extension but explicitly out of scope here.
 
 - **No rollback.** If `create-release` fails after `prepare` has pushed the tag, the tag stays. The maintainer deletes the tag (`git push origin :v$NEW`) and re-dispatches. The bumped commit on master stays — that's harmless; the version is what it is.
 
