@@ -10,30 +10,30 @@ Turn rrdtool's release into a single click in the GitHub Actions "Run workflow" 
 
 1. Refuse to run if CI is not green on `master` HEAD.
 2. Compute the new version, finalize `CHANGES`, propagate version strings into all source locations, commit, and tag — all without human edits.
-3. Produce the source tarball and the Windows MSVC binaries, attach them both to a single GitHub Release with extracted release notes.
-
-Out of scope for this iteration: RPM and DEB packages. Those are sketched in the "Future extensions" section so the workflow can grow into them without restructuring.
+3. Produce the source tarball, the Windows MSVC binaries, RPM packages (AlmaLinux), and DEB packages (Ubuntu / Debian), all attached to a single GitHub Release with extracted release notes.
 
 ## Constraints
 
 - **Master only.** Branches like `1.9` are no longer used. The workflow runs only when dispatched from `refs/heads/master`.
 - **CI is the gate.** A release must not happen if `Linux Build` or `Windows CI` failed on the commit at master HEAD.
-- **One Release, all artifacts.** Source tarball + MSVC x64 zip + MSVC x86 zip attached to the same Release.
-- **No SCP-to-james coupling.** The local `rrdtool-release` script's `scp` step is parallel/legacy, not on the critical path. The GitHub Release becomes the canonical drop.
+- **One Release, all artifacts.** Source tarball, MSVC x64/x86 zips, distro-tagged `.rpm` and `.deb` files, all attached to the same GitHub Release.
+- **Binary packages run in distro containers.** rrdtool's dependency tree (cairo, pango, libdbi, lua, tcl, ruby, perl, python, etc.) is too large to install on the host runner cleanly; per-distro containers isolate it.
 
 ## Non-goals
 
-- DEB or RPM builds (sketched, deferred).
 - MSYS2 release artifacts (MSYS2 stays in CI as a smoke test only).
+- Source packages (`*.src.rpm`, `*.dsc`/`*.tar.xz`). Only binary `.rpm` and `.deb` are produced. The source tarball is the canonical source distribution.
 - Changes to `build-test-linux.yml`, `ci-workflow.yml`, `code-coverage.yml`, `codeql-analysis.yml`. These remain push/PR-triggered.
 
 ## Workflow shape
 
-One new file, `.github/workflows/release.yml`, with five jobs:
+One new file, `.github/workflows/release.yml`. Job graph:
 
 ```
 check-ci ──► prepare ──► build-source ──┐
-                    └──► build-windows ─┴──► create-release
+                    ├──► build-windows ─┤
+                    ├──► build-rpm     ─┤
+                    └──► build-deb     ─┴──► create-release
 ```
 
 ### Inputs
@@ -133,7 +133,7 @@ Steps:
 
    That is: rename the existing master block's heading to the new version+date (with `=` underline matching title length), and prepend a fresh empty master block above it.
 
-   Implementation: a single perl `-0777` script that captures the master block's contents, writes the empty master block first, then the renamed version block with the captured contents. See `appendix-changes-rewrite.pl` (will be the in-workflow script body, not a separate file — small enough to inline).
+   Implementation: a single perl `-0777` script that captures the master block's contents, writes the empty master block first, then the renamed version block with the captured contents. Small enough to inline in the workflow.
 
 6. **Commit, tag, push**:
 
@@ -177,12 +177,106 @@ Steps:
 5. **New**: zip the collected `rrdtool-X.Y.Z-${{ matrix.configuration }}_vcpkg/` directory into `rrdtool-X.Y.Z-${{ matrix.configuration }}_vcpkg.zip` (today the workflow uploads the directory as a tree, which isn't a useful release artifact).
 6. Upload the zip as a workflow artifact named `windows-${{ matrix.configuration }}`.
 
+### Job: `build-rpm`
+
+Needs: `prepare`, `build-source` (consumes the source tarball). Runs on `ubuntu-latest` with a distro container:
+
+```yaml
+build-rpm:
+  needs: [prepare, build-source]
+  runs-on: ubuntu-latest
+  continue-on-error: true
+  strategy:
+    fail-fast: false
+    matrix:
+      image: [almalinux:9]   # add almalinux:8 / fedora:latest later if needed
+  container:
+    image: ${{ matrix.image }}
+```
+
+The existing `rrdtool.spec` is the seed. `rpmbuild -ta` extracts the source tarball, runs `%prep`, `%build`, `%install`, and produces a stack of binary RPMs (one per subpackage: main, devel, doc, perl, python, tcl, lua, ruby, cached).
+
+Steps:
+
+1. Install build dependencies via `dnf`:
+   ```
+   dnf install -y epel-release
+   dnf install -y --enablerepo=crb \
+     gcc gcc-c++ make autoconf automake libtool rpm-build groff \
+     gettext gettext-devel intltool \
+     openssl-devel freetype-devel libpng-devel zlib-devel \
+     cairo-devel pango-devel libxml2-devel glib2-devel libdbi-devel \
+     perl-devel perl-ExtUtils-MakeMaker \
+     python3-devel tcl-devel lua-devel ruby ruby-devel
+   ```
+   (`epel-release` and `--enablerepo=crb` give us `libdbi-devel` on Alma 9 — it's in CRB.)
+2. Download the `source-tarball` artifact.
+3. Move it into `~/rpmbuild/SOURCES/`.
+4. `rpmbuild --nodeps -ta --without php rrdtool-X.Y.Z.tar.gz`
+   - `--without php` skips the obsolete PHP4 bindings the spec still references.
+   - `--nodeps` is included because some `Requires:` (e.g. `dejavu-lgc-fonts`) may not be installable at build time; it's a build-time skip only.
+5. Collect resulting `.rpm` files (excluding `.src.rpm`) from `~/rpmbuild/RPMS/<arch>/`. The dist tag from rpmbuild (`.el9`, `.fc40`, etc.) already disambiguates filenames across distros.
+6. Upload as artifact `rpm-${{ matrix.image }}` (slashes stripped to e.g. `rpm-almalinux-9`).
+
+### Job: `build-deb`
+
+Needs: `prepare`, `build-source`. Runs on `ubuntu-latest` with a distro container:
+
+```yaml
+build-deb:
+  needs: [prepare, build-source]
+  runs-on: ubuntu-latest
+  continue-on-error: true
+  strategy:
+    fail-fast: false
+    matrix:
+      image: [ubuntu:22.04, ubuntu:24.04, debian:12]
+  container:
+    image: ${{ matrix.image }}
+```
+
+The repo's `debian/` directory contains only a README — there is **no** Debian source packaging in-tree. So `dpkg-buildpackage` is not viable without significant new work. Instead we use **`fpm`** (Effing Package Management), the standard tool for converting a `make install DESTDIR=...` tree into a `.deb`. This produces a single-package `.deb` containing the binaries, libraries, headers, man pages, and language bindings together — without the subpackage split the RPM spec provides. That's acceptable for an upstream-provided package; downstream Debian maintainers maintain their own properly-split packaging.
+
+Steps:
+
+1. Install build deps + fpm:
+   ```
+   apt-get update
+   apt-get install -y build-essential autoconf automake libtool pkg-config \
+     gettext intltool groff \
+     libcairo2-dev libpango1.0-dev libxml2-dev libglib2.0-dev libdbi-dev \
+     libfreetype6-dev libpng-dev zlib1g-dev \
+     libperl-dev python3-dev tcl-dev liblua5.1-0-dev ruby ruby-dev \
+     ruby-rubygems
+   gem install --no-document fpm
+   ```
+2. Download `source-tarball` artifact.
+3. Extract, `./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var --disable-static --with-pic`, `make`, `make install DESTDIR=$PWD/stage`.
+4. Run `fpm` to produce the `.deb`:
+   ```
+   fpm -s dir -t deb -n rrdtool -v X.Y.Z \
+       --iteration 1~${DISTRO_TAG} \
+       --license "GPL-2.0-or-later with exceptions" \
+       --maintainer "Tobias Oetiker <tobi@oetiker.ch>" \
+       --vendor "oss.oetiker.ch" \
+       --url "https://oss.oetiker.ch/rrdtool/" \
+       --description "Round Robin Database Tool" \
+       --depends "libcairo2" --depends "libpango-1.0-0" \
+       --depends "libxml2" --depends "libpng16-16" \
+       --depends "libfreetype6" --depends "libdbi1" \
+       -C stage usr
+   ```
+   `DISTRO_TAG` is one of `ubuntu22.04`, `ubuntu24.04`, `debian12`, computed from `${{ matrix.image }}` so the iteration suffix marks which distro built it.
+5. Upload as artifact `deb-${{ matrix.image }}` (slashes stripped). Resulting filename: `rrdtool_X.Y.Z-1~ubuntu22.04_amd64.deb` etc.
+
 ### Job: `create-release`
 
-Needs: `prepare`, `build-source`, `build-windows`. Runs on `ubuntu-latest`. Permissions: `contents: write`.
+Needs: `prepare`, `build-source`, `build-windows`, `build-rpm`, `build-deb`. Runs on `ubuntu-latest`. Permissions: `contents: write`.
+
+Since `build-rpm` and `build-deb` use `continue-on-error: true` (see "Failure-mode policy" below), this job runs even if one of those matrix entries failed. `if: always() && needs.build-source.result == 'success' && needs.build-windows.result == 'success'` enforces that the source and Windows builds must succeed.
 
 1. Checkout the tag (sparse, just `CHANGES`).
-2. `actions/download-artifact@v6` with `pattern: '*'`, `merge-multiple: true`, into `dist/`.
+2. `actions/download-artifact@v6` with `pattern: '*'`, `merge-multiple: true`, into `dist/`. Collects `rrdtool-X.Y.Z.tar.gz`, the Windows zips, all successful `.rpm` files, and all successful `.deb` files.
 3. **Extract release notes** keyed on the version (not the first-three-lines heuristic the current workflow uses, which would now grab the empty master placeholder):
 
    ```bash
@@ -200,62 +294,24 @@ Needs: `prepare`, `build-source`, `build-windows`. Runs on `ubuntu-latest`. Perm
    - `discussionCategory: "Release Issues"`
    - `name: "RRDtool Version ${{ needs.prepare.outputs.version }}"`
 
+### Failure-mode policy for binary packages
+
+`build-rpm` and `build-deb` use **`continue-on-error: true`** at the job level, plus `fail-fast: false` in their matrices. Rationale: the source tarball is the canonical release; an outdated `rrdtool.spec`, missing apt mirror, or single-distro container hiccup should not prevent a release that the maintainer has explicitly green-lit. When an `.rpm` or `.deb` job fails, the Release still publishes with whatever binary packages succeeded plus the source tarball and Windows artifacts. The failed job is visible in the workflow run, giving a clean signal for follow-up cleanup without blocking the release.
+
+`build-source` and `build-windows` do **not** get `continue-on-error` — those are the established artifacts users depend on. Their failure aborts the release.
+
 ## Files added / removed / changed
 
 | File | Action |
 |---|---|
-| `.github/workflows/release.yml` | **new** — the orchestrator |
+| `.github/workflows/release.yml` | **new** — the orchestrator with six jobs |
 | `.github/workflows/release-source.yml` | **delete** — folded into `release.yml`; the `push: tags` trigger is no longer needed because tags only come from `release.yml` itself |
 | `.github/workflows/release-windows.yml` | **delete** — folded into `release.yml`; the `push: tags` trigger likewise disappears. The CI smoke build for MSVC stays in `ci-workflow.yml` |
 | `conftools/bump-version.sh` | **new** — version-propagation logic extracted from `rrdtool-release` |
 | `rrdtool-release` | **refactor** — call `conftools/bump-version.sh` for the propagation step; SCP-to-james and local sanity build stay intact for the maintainer's local workflow |
 | `docs/superpowers/specs/2026-05-13-release-workflow-design.md` | **new** — this document |
 
-`build-test-linux.yml`, `ci-workflow.yml`, `code-coverage.yml`, `codeql-analysis.yml` are not touched.
-
-## Future extensions: RPM and DEB
-
-Both fit cleanly as additional `needs: prepare` siblings of `build-source` / `build-windows`, with their artifacts joined into `create-release`'s file list. The design choice to make is **how to run them** given rrdtool's large dependency tree (tcl, lua, libdbi, pango, etc.).
-
-Recommendation: **container-based jobs**, one matrix entry per target distro.
-
-```yaml
-build-rpm:
-  needs: prepare
-  runs-on: ubuntu-latest
-  strategy:
-    matrix:
-      image: [almalinux:8, almalinux:9]
-  container:
-    image: ${{ matrix.image }}
-  steps:
-    - dnf install -y autoconf automake libtool gcc make rpm-build \
-        tcl-devel lua-devel pango-devel libdbi-devel ...
-    - checkout tag
-    - ./bootstrap && ./configure && make dist
-    - rpmbuild -ta rrdtool-X.Y.Z.tar.gz
-    - upload .rpm with distro suffix
-
-build-deb:
-  needs: prepare
-  runs-on: ubuntu-latest
-  strategy:
-    matrix:
-      image: [ubuntu:22.04, ubuntu:24.04, debian:12]
-  container:
-    image: ${{ matrix.image }}
-  steps:
-    - apt install -y debhelper + the dev-dep tree
-    - checkout tag
-    - dpkg-buildpackage -us -uc -b
-    - upload .deb with distro suffix
-```
-
-The existing `rrdtool.spec` and `debian/` directory are the seeds. The container approach handles the dependency mess because each distro's job is self-contained — no host package coordination.
-
-If GitHub-hosted runners' `container:` proves too restrictive (older Almalinux 8 vcpkg pinning, etc.), fall back to a `runs-on: ubuntu-latest` job that drives `podman run --rm -v $PWD:/src ...` explicitly. Same shape, different driver.
-
-This iteration does **not** implement RPM or DEB. The job graph is designed so they can be added without restructuring.
+`build-test-linux.yml`, `ci-workflow.yml`, `code-coverage.yml`, `codeql-analysis.yml` are not touched. `rrdtool.spec` and `debian/` are not touched in this iteration (the spec is dated and may need fixes that surface from the first `build-rpm` run, but those can come as follow-ups).
 
 ## Edge cases & risks
 
@@ -265,7 +321,11 @@ This iteration does **not** implement RPM or DEB. The job graph is designed so t
 
 - **`CHANGES` doesn't start with the expected master block.** The perl rewrite is structural; if the file has been reorganized, it errors out. The maintainer fixes `CHANGES` and re-dispatches.
 
-- **The Windows MSVC build is slow** (~10–15 min). Total release time ~20–25 min including the source tarball. Acceptable for a release flow.
+- **Pipeline duration.** Windows MSVC build is ~10–15 min, RPM and DEB matrices run in parallel. Total release time ~15–20 min. Acceptable.
+
+- **`rrdtool.spec` is dated.** It hasn't been touched recently and may produce build warnings or fail outright on AlmaLinux 9. `continue-on-error: true` on `build-rpm` means a failure here doesn't block the release; the issue gets surfaced for follow-up. Same applies to `build-deb`.
+
+- **`fpm`-built `.deb` is non-canonical.** It's a single combined package, not the split-package layout Debian users expect from `apt`. This is upstream's package, not Debian's. Anyone wanting a "proper" Debian package uses the Debian-maintained archive. Documenting this in the GitHub Release description is worthwhile (future work, low priority).
 
 - **No rollback.** If `create-release` fails after `prepare` has pushed the tag, the tag stays. The maintainer deletes the tag (`git push origin :v$NEW`) and re-dispatches. The bumped commit on master stays — that's harmless; the version is what it is.
 
