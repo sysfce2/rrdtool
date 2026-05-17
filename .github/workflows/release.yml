@@ -461,9 +461,16 @@ jobs:
     permissions:
       contents: write
     steps:
+      # RELEASE_PAT is a repo-admin Personal Access Token (Contents: write).
+      # The default GITHUB_TOKEN / github-actions[bot] cannot be added to the
+      # branch ruleset bypass list, so the release commit + tag push below is
+      # authenticated as the admin (who IS on the bypass list) via this PAT.
+      # actions/checkout persists the token in git config, so the later
+      # `git push` and `git fetch` steps use it automatically.
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          token: ${{ secrets.RELEASE_PAT }}
 
       - name: Race check (master not advanced since check-ci)
         env:
