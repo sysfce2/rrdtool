@@ -1,0 +1,4 @@
+# CHANGES is rewritten at release time by conftools/finalize-changes.pl,
+# whose regexes are LF-anchored. Force LF on checkout everywhere (notably
+# on Windows CI runners) so that rewrite cannot break.
+CHANGES text eol=lf

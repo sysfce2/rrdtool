@@ -287,12 +287,13 @@ jobs:
           version: ${{ needs.compute-version.outputs.version }}
           date: ${{ needs.compute-version.outputs.date }}
 
-      - name: Build source tarball locally for rpmbuild input
-        run: |
-          set -e
-          ./bootstrap
-          ./configure
-          make dist
+      # Reuse the canonical tarball produced by build-source instead of
+      # rebuilding it here: `make dist` needs doc-toolchain deps (ps2pdf via
+      # ghostscript) that this minimal RPM container does not carry.
+      - name: Download source tarball from build-source
+        uses: actions/download-artifact@v6
+        with:
+          name: source-tarball
 
       - name: Stage rpmbuild tree
         env:

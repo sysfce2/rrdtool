@@ -34,6 +34,11 @@ local $/;
 my $content = <$fh>;
 close $fh;
 
+# Normalize CRLF -> LF. On Windows CI runners actions/checkout writes
+# CHANGES with CRLF line endings, which would defeat the LF-anchored
+# regexes below. The file is always rewritten with LF (matching the repo).
+$content =~ s/\r\n/\n/g;
+
 # Idempotency: a "RRDtool $version - YYYY-MM-DD" header already present
 # means the rewrite ran on a previous job in the same release; just exit.
 if ($content =~ /^RRDtool \Q$version\E - \d{4}-\d{2}-\d{2}\b/m) {
