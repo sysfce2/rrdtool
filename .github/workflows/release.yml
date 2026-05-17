@@ -322,7 +322,7 @@ jobs:
           set -e
           mkdir -p out
           # Copy only the binary rpm (not the src.rpm — design says binaries only)
-          cp ~/rpmbuild/RPMS/x86_64/rrdtool-1.x-opt-${VERSION}-*.rpm out/
+          cp ~/rpmbuild/RPMS/x86_64/rrdtool-1-opt-${VERSION}-*.rpm out/
           ls -l out/
 
       - uses: actions/upload-artifact@v6
@@ -339,9 +339,9 @@ jobs:
           # Install the distro rrdtool first to prove DB-level coexistence.
           dnf install -y rrdtool
           # Install our /opt package alongside it.
-          dnf install -y ./out/rrdtool-1.x-opt-${VERSION}-*.rpm
+          dnf install -y ./out/rrdtool-1-opt-${VERSION}-*.rpm
           # Both packages must be in the rpm database at the same time.
-          rpm -q rrdtool rrdtool-1.x-opt
+          rpm -q rrdtool rrdtool-1-opt
           # The distro binary and ours both run, independently.
           rrdtool --version
           /opt/rrdtool/bin/rrdtool --version
@@ -443,7 +443,7 @@ jobs:
           set -e
           mkdir -p out
           fpm -s dir -t deb \
-              -n rrdtool-1.x-opt \
+              -n rrdtool-1-opt \
               -v "$VERSION" \
               --iteration "1~${DISTRO_TAG}" \
               --license "GPL-2.0-or-later WITH FLOSS-exception-1.0" \
@@ -475,9 +475,9 @@ jobs:
           # Install the distro rrdtool first to prove DB-level coexistence.
           apt-get install -y rrdtool
           # Install our /opt package alongside it.
-          apt-get install -y ./out/rrdtool-1.x-opt_*.deb
+          apt-get install -y ./out/rrdtool-1-opt_*.deb
           # Both packages must be in the dpkg database at the same time.
-          dpkg -l rrdtool rrdtool-1.x-opt
+          dpkg -l rrdtool rrdtool-1-opt
           # The distro binary and ours both run, independently.
           rrdtool --version
           /opt/rrdtool/bin/rrdtool --version

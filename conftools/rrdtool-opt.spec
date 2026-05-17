@@ -7,7 +7,7 @@
 #
 # @VERSION@ is substituted by the release workflow before invoking rpmbuild.
 
-Name:           rrdtool-1.x-opt
+Name:           rrdtool-1-opt
 Version:        @VERSION@
 Release:        1%{?dist}
 Summary:        Round Robin Database Tool (upstream /opt build)
