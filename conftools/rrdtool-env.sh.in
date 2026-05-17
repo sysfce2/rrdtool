@@ -1,0 +1,31 @@
+#!/bin/sh
+# Source me to use the /opt/rrdtool installation from your shell:
+#
+#   . /opt/rrdtool/bin/rrdtool-env.sh
+#
+# Puts /opt/rrdtool/bin on PATH and makes the bundled language bindings
+# (Perl, Python, Tcl, Lua, Ruby) discoverable to their interpreters.
+# Does not modify any system file. Safe to source multiple times.
+
+ROOT=/opt/rrdtool
+
+export PATH="$ROOT/bin${PATH:+:$PATH}"
+export MANPATH="$ROOT/share/man${MANPATH:+:$MANPATH}"
+export PKG_CONFIG_PATH="$ROOT/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+
+export PERL5LIB="$ROOT/lib/perl${PERL5LIB:+:$PERL5LIB}"
+
+PY_SP=$(ls -d "$ROOT"/lib/python*/site-packages 2>/dev/null | head -1)
+[ -n "$PY_SP" ] && export PYTHONPATH="$PY_SP${PYTHONPATH:+:$PYTHONPATH}"
+
+RB_ARCH=$(ls -d "$ROOT"/lib/ruby/*-* 2>/dev/null | head -1)
+if [ -n "$RB_ARCH" ]; then
+    export RUBYLIB="$ROOT/lib/ruby:$RB_ARCH${RUBYLIB:+:$RUBYLIB}"
+else
+    export RUBYLIB="$ROOT/lib/ruby${RUBYLIB:+:$RUBYLIB}"
+fi
+
+LUA_VDIR=$(ls -d "$ROOT"/lib/lua/5.* 2>/dev/null | head -1)
+[ -n "$LUA_VDIR" ] && export LUA_CPATH="$LUA_VDIR/?.so;${LUA_CPATH:-;;}"
+
+export TCLLIBPATH="$ROOT/lib${TCLLIBPATH:+ $TCLLIBPATH}"
