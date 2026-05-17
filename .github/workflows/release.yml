@@ -322,7 +322,7 @@ jobs:
           set -e
           mkdir -p out
           # Copy only the binary rpm (not the src.rpm — design says binaries only)
-          cp ~/rpmbuild/RPMS/x86_64/rrdtool-${VERSION}-*.rpm out/
+          cp ~/rpmbuild/RPMS/x86_64/rrdtool-1.x-opt-${VERSION}-*.rpm out/
           ls -l out/
 
       - uses: actions/upload-artifact@v6
@@ -330,6 +330,31 @@ jobs:
           name: rpm-${{ matrix.tag }}
           path: out/*.rpm
           if-no-files-found: error
+
+      - name: Verify the rpm installs, coexists, and runs
+        env:
+          VERSION: ${{ needs.compute-version.outputs.version }}
+        run: |
+          set -e
+          # Install the distro rrdtool first to prove DB-level coexistence.
+          dnf install -y rrdtool
+          # Install our /opt package alongside it.
+          dnf install -y ./out/rrdtool-1.x-opt-${VERSION}-*.rpm
+          # Both packages must be in the rpm database at the same time.
+          rpm -q rrdtool rrdtool-1.x-opt
+          # The distro binary and ours both run, independently.
+          rrdtool --version
+          /opt/rrdtool/bin/rrdtool --version
+          # Functional smoke test of the /opt build.
+          cd /tmp
+          /opt/rrdtool/bin/rrdtool create smoke.rrd --start 1000000000 --step 300 \
+              DS:x:GAUGE:600:U:U RRA:AVERAGE:0.5:1:12
+          /opt/rrdtool/bin/rrdtool update smoke.rrd 1000000300:42
+          /opt/rrdtool/bin/rrdtool fetch smoke.rrd AVERAGE \
+              --start 1000000000 --end 1000000300
+          # The env helper must put our build first on PATH.
+          . /opt/rrdtool/bin/rrdtool-env.sh
+          test "$(command -v rrdtool)" = /opt/rrdtool/bin/rrdtool
 
   # ---------------------------------------------------------------------------
   # build-deb: per-distro container, builds a .deb via fpm from a staged
@@ -418,7 +443,7 @@ jobs:
           set -e
           mkdir -p out
           fpm -s dir -t deb \
-              -n rrdtool \
+              -n rrdtool-1.x-opt \
               -v "$VERSION" \
               --iteration "1~${DISTRO_TAG}" \
               --license "GPL-2.0-or-later WITH FLOSS-exception-1.0" \
@@ -443,6 +468,29 @@ jobs:
           name: deb-${{ matrix.tag }}
           path: out/*.deb
           if-no-files-found: error
+
+      - name: Verify the deb installs, coexists, and runs
+        run: |
+          set -e
+          # Install the distro rrdtool first to prove DB-level coexistence.
+          apt-get install -y rrdtool
+          # Install our /opt package alongside it.
+          apt-get install -y ./out/rrdtool-1.x-opt_*.deb
+          # Both packages must be in the dpkg database at the same time.
+          dpkg -l rrdtool rrdtool-1.x-opt
+          # The distro binary and ours both run, independently.
+          rrdtool --version
+          /opt/rrdtool/bin/rrdtool --version
+          # Functional smoke test of the /opt build.
+          cd /tmp
+          /opt/rrdtool/bin/rrdtool create smoke.rrd --start 1000000000 --step 300 \
+              DS:x:GAUGE:600:U:U RRA:AVERAGE:0.5:1:12
+          /opt/rrdtool/bin/rrdtool update smoke.rrd 1000000300:42
+          /opt/rrdtool/bin/rrdtool fetch smoke.rrd AVERAGE \
+              --start 1000000000 --end 1000000300
+          # The env helper must put our build first on PATH.
+          . /opt/rrdtool/bin/rrdtool-env.sh
+          test "$(command -v rrdtool)" = /opt/rrdtool/bin/rrdtool
 
   # ---------------------------------------------------------------------------
   # publish: only job that mutates the repo. Runs only after every build job
