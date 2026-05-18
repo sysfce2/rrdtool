@@ -11,6 +11,12 @@
 # they locate librrd without any system linker config. RHEL's check-rpaths
 # QA script rejects every non-standard RPATH and fails the build, so it
 # must be disabled for this package.
+#
+# On RHEL/EL the check is wired through %%__arch_install_post (not the
+# Fedora %%__brp_check_rpaths hook), so redefine that hook to keep only the
+# buildroot-leak check and drop check-rpaths. Both lines together cover
+# RHEL and Fedora.
+%global __arch_install_post /usr/lib/rpm/check-buildroot
 %global __brp_check_rpaths %{nil}
 
 Name:           rrdtool-1-opt
