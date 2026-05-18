@@ -92,6 +92,21 @@ make %{?_smp_mflags}
 %install
 make install DESTDIR=%{buildroot}
 
+# Ruby's mkmf installs the compiled extension into the interpreter's own
+# sitearchdir (/usr/local/lib*/ruby/site_ruby), ignoring our --prefix — so
+# RRD.so lands outside /opt and would trip rpmbuild's unpackaged-files check.
+# Relocate it under /opt/rrdtool/lib/ruby; rrdtool-env.sh puts that directory
+# on RUBYLIB.
+rrd_rb=$(find %{buildroot} -name RRD.so -path '*ruby*')
+if [ -z "$rrd_rb" ]; then
+    echo "ruby binding RRD.so not found in buildroot" >&2
+    exit 1
+fi
+install -d %{buildroot}/opt/rrdtool/lib/ruby
+mv "$rrd_rb" %{buildroot}/opt/rrdtool/lib/ruby/RRD.so
+# Drop the now-empty system tree the ruby binding escaped into.
+rm -rf %{buildroot}/usr
+
 # Bake the rpath into librrd.pc's Libs: line so consumers get -Wl,-rpath
 # embedded in their binaries via `pkg-config --libs librrd`. This is only
 # done in the /opt build; src/librrd.pc.in stays untouched upstream so

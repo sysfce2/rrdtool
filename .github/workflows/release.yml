@@ -195,7 +195,7 @@ jobs:
           date: ${{ needs.compute-version.outputs.date }}
 
       - name: vcpkg build
-        uses: johnwason/vcpkg-action@v7
+        uses: johnwason/vcpkg-action@v8
         id: vcpkg
         with:
           pkgs: '${{ matrix.vcpkgPackages }}'
@@ -291,7 +291,7 @@ jobs:
       # rebuilding it here: `make dist` needs doc-toolchain deps (ps2pdf via
       # ghostscript) that this minimal RPM container does not carry.
       - name: Download source tarball from build-source
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: source-tarball
 
@@ -338,7 +338,8 @@ jobs:
         run: |
           set -e
           # Install the distro rrdtool first to prove DB-level coexistence.
-          dnf install -y rrdtool
+          # ruby is pulled in so the bundled ruby binding can be smoke-tested.
+          dnf install -y rrdtool ruby
           # Install our /opt package alongside it.
           dnf install -y ./out/rrdtool-1-opt-${VERSION}-*.rpm
           # Both packages must be in the rpm database at the same time.
@@ -356,6 +357,8 @@ jobs:
           # The env helper must put our build first on PATH.
           . /opt/rrdtool/bin/rrdtool-env.sh
           test "$(command -v rrdtool)" = /opt/rrdtool/bin/rrdtool
+          # The relocated ruby binding must load via the RUBYLIB it sets.
+          ruby -e 'require "RRD"; puts "ruby binding OK"'
 
   # ---------------------------------------------------------------------------
   # build-deb: per-distro container, builds a .deb via fpm from a staged
@@ -427,21 +430,30 @@ jobs:
           make
           make install DESTDIR="$PWD/stage"
 
-      # Diagnostic: Ruby's mkmf ignores --prefix and installs the binding
-      # into Ruby's own tree. This step records where it actually landed
-      # and the mkmf variables that decided it, so the relocation fix can
-      # be made precisely. Read-only; never fails the job.
-      - name: Diagnose ruby binding placement
+      # Ruby's mkmf installs the compiled extension into the interpreter's
+      # own sitearchdir (/usr/local/lib/<arch>/site_ruby), ignoring our
+      # --prefix — so RRD.so lands outside /opt and fpm (which packages only
+      # opt/) would silently drop it. Relocate it under /opt/rrdtool/lib/ruby;
+      # rrdtool-env.sh puts that directory on RUBYLIB.
+      - name: Relocate ruby binding under /opt
         run: |
-          echo "=== bindings/ruby/Makefile key install vars ==="
-          grep -E '^(prefix|exec_prefix|libdir|rubylibprefix|RUBY_BASE_NAME|sitedir|sitelibdir|sitearchdir|ruby_version|sitearch|arch|RUBYARCHDIR|RUBYLIBDIR|target_prefix)[[:space:]]*=' \
-              bindings/ruby/Makefile || echo "(bindings/ruby/Makefile not found)"
-          echo "=== RRD.so location(s) in stage/ ==="
-          rrdso=$(find stage -name 'RRD.so')
-          echo "${rrdso:-(RRD.so not found in stage/)}"
-          echo "=== staged content outside /opt (expected: none) ==="
+          set -e
+          rrd_rb=$(find stage -name RRD.so -path '*ruby*')
+          if [ -z "$rrd_rb" ]; then
+            echo "::error::ruby binding RRD.so not found in stage/"
+            exit 1
+          fi
+          echo "found ruby binding at: $rrd_rb"
+          mkdir -p stage/opt/rrdtool/lib/ruby
+          mv "$rrd_rb" stage/opt/rrdtool/lib/ruby/RRD.so
+          # Drop the now-empty system tree the ruby binding escaped into.
+          rm -rf stage/usr
+          # Nothing should remain staged outside opt/.
           outside=$(find stage -mindepth 1 -maxdepth 1 -not -name opt)
-          echo "${outside:-(clean: only opt/ present)}"
+          if [ -n "$outside" ]; then
+            echo "::error::unexpected staged content outside /opt: $outside"
+            exit 1
+          fi
 
       - name: Post-install touches (rpath + env helper)
         run: |
@@ -490,7 +502,8 @@ jobs:
         run: |
           set -e
           # Install the distro rrdtool first to prove DB-level coexistence.
-          apt-get install -y rrdtool
+          # ruby is pulled in so the bundled ruby binding can be smoke-tested.
+          apt-get install -y rrdtool ruby
           # Install our /opt package alongside it.
           apt-get install -y ./out/rrdtool-1-opt_*.deb
           # Both packages must be in the dpkg database at the same time.
@@ -508,6 +521,8 @@ jobs:
           # The env helper must put our build first on PATH.
           . /opt/rrdtool/bin/rrdtool-env.sh
           test "$(command -v rrdtool)" = /opt/rrdtool/bin/rrdtool
+          # The relocated ruby binding must load via the RUBYLIB it sets.
+          ruby -e 'require "RRD"; puts "ruby binding OK"'
 
   # ---------------------------------------------------------------------------
   # publish: only job that mutates the repo. Runs only after every build job
@@ -571,7 +586,7 @@ jobs:
           git push origin master --follow-tags
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: '*'
