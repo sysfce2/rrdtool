@@ -41,7 +41,7 @@ jobs:
         make check TESTS_STYLE="rrdcached-tcp"
     - name: Upload rrdcached-tcp test-suite.log
       if: ${{ failure() }}
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: rrdcached-tcp_test-suite.log
         path: tests/test-suite.log
@@ -57,7 +57,7 @@ jobs:
         podchecker doc/*.pod
     - name: Upload valgrind test-suite.log
       if: ${{ failure() }}
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: valgrind_test-suite.log
         path: tests/test-suite.log

@@ -36,7 +36,7 @@ jobs:
         run: |
           echo 'Running in MSYS2!'
           ./ci-build_MSYS2.sh
-      # - uses: actions/upload-artifact@v6
+      # - uses: actions/upload-artifact@v7
       #   with:
       #     name: test-suite.log
       #     path: tests/test-suite.log
@@ -76,7 +76,7 @@ jobs:
       # vcpkg-action
       # https://github.com/johnwason/vcpkg-action
       - name: vcpkg build
-        uses: johnwason/vcpkg-action@v7
+        uses: johnwason/vcpkg-action@v8
         id: vcpkg
         with:
           pkgs: '${{ matrix.vcpkgPackages }}'

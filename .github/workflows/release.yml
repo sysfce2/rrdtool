@@ -149,7 +149,7 @@ jobs:
           ./configure
           make dist
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: source-tarball
           path: rrdtool-${{ needs.compute-version.outputs.version }}.tar.gz
@@ -232,7 +232,7 @@ jobs:
           (cd "$(dirname "$dir")" && 7z a -tzip "../../$zip" "$(basename "$dir")")
           ls -l "$zip"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-${{ matrix.configuration }}
           path: rrdtool-${{ needs.compute-version.outputs.version }}-${{ matrix.configuration }}_vcpkg.zip
@@ -326,7 +326,7 @@ jobs:
           cp ~/rpmbuild/RPMS/x86_64/rrdtool-1-opt-${VERSION}-*.rpm out/
           ls -l out/
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: rpm-${{ matrix.tag }}
           path: out/*.rpm
@@ -492,7 +492,7 @@ jobs:
               -C stage opt
           ls -l out/
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: deb-${{ matrix.tag }}
           path: out/*.deb
