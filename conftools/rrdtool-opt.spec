@@ -7,6 +7,12 @@
 #
 # @VERSION@ is substituted by the release workflow before invoking rpmbuild.
 
+# Our binaries carry a deliberate RPATH of /opt/rrdtool/lib — that is how
+# they locate librrd without any system linker config. RHEL's check-rpaths
+# QA script rejects every non-standard RPATH and fails the build, so it
+# must be disabled for this package.
+%global __brp_check_rpaths %{nil}
+
 Name:           rrdtool-1-opt
 Version:        @VERSION@
 Release:        1%{?dist}

@@ -427,6 +427,22 @@ jobs:
           make
           make install DESTDIR="$PWD/stage"
 
+      # Diagnostic: Ruby's mkmf ignores --prefix and installs the binding
+      # into Ruby's own tree. This step records where it actually landed
+      # and the mkmf variables that decided it, so the relocation fix can
+      # be made precisely. Read-only; never fails the job.
+      - name: Diagnose ruby binding placement
+        run: |
+          echo "=== bindings/ruby/Makefile key install vars ==="
+          grep -E '^(prefix|exec_prefix|libdir|rubylibprefix|RUBY_BASE_NAME|sitedir|sitelibdir|sitearchdir|ruby_version|sitearch|arch|RUBYARCHDIR|RUBYLIBDIR|target_prefix)[[:space:]]*=' \
+              bindings/ruby/Makefile || echo "(bindings/ruby/Makefile not found)"
+          echo "=== RRD.so location(s) in stage/ ==="
+          rrdso=$(find stage -name 'RRD.so')
+          echo "${rrdso:-(RRD.so not found in stage/)}"
+          echo "=== staged content outside /opt (expected: none) ==="
+          outside=$(find stage -mindepth 1 -maxdepth 1 -not -name opt)
+          echo "${outside:-(clean: only opt/ present)}"
+
       - name: Post-install touches (rpath + env helper)
         run: |
           set -e
