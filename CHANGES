@@ -3,6 +3,14 @@ RRDtool - master ...
 ====================
 Bugfixes
 --------
+
+Features
+--------
+
+RRDtool 1.10.1 - 2026-05-19
+===========================
+Bugfixes
+--------
 * Modernize obsolete autoconf macros so configure regenerates cleanly with current autotools @oetiker
 
 Features
