@@ -425,18 +425,11 @@ dnl function also defines PYTHON_INCLUDES
 AC_DEFUN([AM_CHECK_PYTHON_HEADERS],
 [AC_REQUIRE([AM_PATH_PYTHON])
 AC_MSG_CHECKING(for headers required to compile python extensions)
-dnl deduce PYTHON_INCLUDES
-py_prefix=`$PYTHON -c "import sys; sys.stdout.write(sys.prefix)"`
-py_exec_prefix=`$PYTHON -c "import sys; sys.stdout.write(sys.exec_prefix)"`
-PYTHON_CONFIG=`which $PYTHON`-config
-if test -x "$PYTHON_CONFIG"; then
-  PYTHON_INCLUDES=`$PYTHON_CONFIG --includes 2>/dev/null`
-else
-  PYTHON_INCLUDES="-I${py_prefix}/include/python${PYTHON_VERSION}"
-  if test "$py_prefix" != "$py_exec_prefix"; then
-    PYTHON_INCLUDES="$PYTHON_INCLUDES -I${py_exec_prefix}/include/python${PYTHON_VERSION}"
-  fi
-fi
+dnl Ask the interpreter itself for its header directory. sysconfig knows the
+dnl exact path including the "m" ABI suffix used by Python <= 3.7 (e.g. EL8's
+dnl /usr/include/python3.6m), and needs neither a python-config binary nor
+dnl "which" on PATH -- both of which are absent in minimal build containers.
+PYTHON_INCLUDES=`$PYTHON -c "import sysconfig; print('-I' + sysconfig.get_path('include'))" 2>/dev/null`
 AC_SUBST(PYTHON_INCLUDES)
 dnl check if the headers exist:
 save_CPPFLAGS="$CPPFLAGS"
