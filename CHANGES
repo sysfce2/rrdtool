@@ -3,6 +3,14 @@ RRDtool - master ...
 ====================
 Bugfixes
 --------
+
+Features
+--------
+
+RRDtool 1.10.0 - 2026-05-19
+===========================
+Bugfixes
+--------
 * Mark the Ruby bindings as Ractor safe @LevitatingBusinessMan
 * Fix Compatiblity with TCL-9 @yselkowitz
 * Correctly link Ruby Bindings @LevitatingBusinessMan
