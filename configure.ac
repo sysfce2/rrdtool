@@ -9,7 +9,7 @@ dnl Inspiration from http://autoconf-archive.cryp.to
 dnl tell automake the this script is for rrdtool
 
 dnl Minimum Autoconf version required.
-AC_PREREQ(2.59)
+AC_PREREQ([2.69])
 
 dnl the official version number is
 dnl a.b.c
@@ -170,7 +170,7 @@ dnl Check for the compiler and static/shared library creation.
 AC_PROG_CPP
 AC_PROG_CC
 AM_PROG_CC_C_O
-AC_PROG_LIBTOOL
+LT_INIT
 
 dnl Try to detect/use GNU features
 CFLAGS="$CFLAGS -D_GNU_SOURCE"
@@ -211,13 +211,11 @@ AC_SUBST(RRD_DEFAULT_FONT)
 CONFIGURE_PART(Checking for Header Files)
 
 dnl Checks for header files.
-AC_HEADER_STDC
 AC_HEADER_DIRENT
-AC_CHECK_HEADERS(langinfo.h stdint.h inttypes.h libgen.h features.h sys/stat.h sys/types.h fcntl.h fp_class.h malloc.h unistd.h ieeefp.h math.h sys/times.h sys/param.h sys/resource.h signal.h float.h stdio.h stdlib.h errno.h string.h ctype.h grp.h pwd.h glob.h)
+AC_CHECK_HEADERS(langinfo.h stdint.h inttypes.h libgen.h features.h sys/stat.h sys/types.h fcntl.h fp_class.h malloc.h unistd.h ieeefp.h math.h sys/time.h sys/times.h sys/param.h sys/resource.h signal.h float.h stdio.h stdlib.h errno.h string.h ctype.h grp.h pwd.h glob.h)
 
 dnl Checks for typedefs, structures, and compiler characteristics.
 AC_C_CONST
-AC_HEADER_TIME
 AC_STRUCT_TM
 
 dnl figure out 'stuff' about
@@ -340,7 +338,7 @@ volatile int x;volatile float f;  ]], [[x = isinf(f)]])],[AC_MSG_RESULT(yes)
 
 dnl finite is BSD, isfinite is C99, so prefer the latter
 AC_CACHE_CHECK([whether isfinite is broken],[ac_cv_have_broken_isfinite],[
-AC_TRY_RUN([
+AC_RUN_IFELSE([AC_LANG_SOURCE([[
 #ifdef HAVE_MATH_H
 #include <math.h>
 #endif
@@ -358,7 +356,7 @@ int main ()
 #endif
 #endif
 return 0;
-}],[ac_cv_have_broken_isfinite=no],[ac_cv_have_broken_isfinite=yes],[
+}]])],[ac_cv_have_broken_isfinite=no],[ac_cv_have_broken_isfinite=yes],[
 case "${target}" in
   hppa*-*-hpux*) ac_cv_have_broken_isfinite=yes ;;
   *-solaris2.8) ac_cv_have_broken_isfinite=yes ;;
@@ -394,15 +392,14 @@ GC_TIMEZONE()
 
 AC_CACHE_CHECK(whether sigwait has 2 arguments,
     ac_cv_libc_sigwait,
-    AC_TRY_COMPILE([
+    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
         #define _POSIX_PTHREAD_SEMANTICS
         #include <stdio.h>
-        #include <signal.h>],
-        [sigset_t sigs; int signo; sigwait(&sigs, &signo);],
-        AC_DEFINE(HAVE_SIGWAIT,1,[have two argument posix sigwait])
-        AC_MSG_RESULT(yes)
-        ,
-        AC_MSG_RESULT(no)
+        #include <signal.h>]],
+        [[sigset_t sigs; int signo; sigwait(&sigs, &signo);]])],
+        [AC_DEFINE(HAVE_SIGWAIT,1,[have two argument posix sigwait])
+        AC_MSG_RESULT(yes)],
+        [AC_MSG_RESULT(no)]
     )
 )
 
@@ -618,10 +615,10 @@ EX_CHECK_ALL(glib-2.0,   glib_check_version,            glib.h,                 
 
 AC_CACHE_CHECK([whether we need to include gthreads for g_thread_init],
     [ac_cv_glibc_g_thread_init],
-    [AC_TRY_COMPILE([#include <glib.h>],
-                    [#if !GLIB_CHECK_VERSION(2, 32, 0)
+    [AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <glib.h>]],
+                    [[#if !GLIB_CHECK_VERSION(2, 32, 0)
                      # error "glib needs g_thread_init"
-                     #endif],
+                     #endif]])],
                      [AC_MSG_RESULT(no)],
                      [EX_CHECK_ALL(gthread-2.0, g_thread_init, glib.h, gthread-2.0, x.x.x, "", "")
                      AC_MSG_RESULT(yes)])])

@@ -300,7 +300,7 @@ jobs:
               freetype-devel libpng-devel zlib-devel \
               libxml2-devel glib2-devel libdbi-devel \
               perl-devel perl-ExtUtils-MakeMaker \
-              python3-devel \
+              python3-devel python3-setuptools \
               tcl-devel \
               lua-devel \
               ruby ruby-devel
@@ -512,7 +512,7 @@ jobs:
               --description "Round Robin Database Tool (upstream /opt build). Source /opt/rrdtool/bin/rrdtool-env.sh to use." \
               --depends "libcairo2" \
               --depends "libpango-1.0-0" \
-              --depends "libxml2" \
+              --depends "libxml2-16 | libxml2" \
               --depends "libpng16-16" \
               --depends "libfreetype6" \
               --depends "libdbi1" \

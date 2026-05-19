@@ -81,16 +81,10 @@
 #define _POSIX_THREAD_SAFE_FUNCTIONS 200112L
 #endif
 
-#ifdef TIME_WITH_SYS_TIME
+#ifdef HAVE_SYS_TIME_H
 # include <sys/time.h>
-# include <time.h>
-#else
-# ifdef HAVE_SYS_TIME_H
-#  include <sys/time.h>
-# else
-#  include <time.h>
-# endif
 #endif
+#include <time.h>
 
 #ifdef HAVE_SYS_TIMES_H
 # include <sys/times.h>
@@ -106,22 +100,7 @@ extern int getrusage(int, struct rusage *);
 #endif
 
 
-/* define strrchr, strchr and memcpy, memmove in terms of bsd funcs
-   make sure you are NOT using bcopy, index or rindex in the code */
-      
-#ifdef STDC_HEADERS
-# include <string.h>
-#else
-# ifndef HAVE_STRCHR
-#  define strchr index
-#  define strrchr rindex
-# endif
-char *strchr (), *strrchr ();
-# ifndef HAVE_MEMMOVE
-#  define memcpy(d, s, n) bcopy ((s), (d), (n))
-#  define memmove(d, s, n) bcopy ((s), (d), (n))
-# endif
-#endif
+#include <string.h>
 
 #ifdef NO_NULL_REALLOC
 # define rrd_realloc(a,b) ( (a) == NULL ? malloc( (b) ) : realloc( (a) , (b) ))
