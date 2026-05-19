@@ -10,7 +10,7 @@ endif
 SUBDIRS = $(SUB_tcl) $(SUB_lua)
 
 if ENABLE_RPATH
-PYTHON_RPATH=--rpath=$(libdir)
+PYTHON_RPATH_LIBDIR=$(libdir)
 PERL_RPATH=RPATH=$(libdir)
 endif
 
@@ -38,12 +38,11 @@ install-data-local:
            && ( cd ${builddir}/ruby \
                 && $(MAKE) EPREFIX=$(DESTDIR)$(exec_prefix) $(RUBY_MAKE_OPTIONS) install ) \
            || true
-	$(AM_V_GEN)test -d ${builddir}/python/build \
-           && ( cd ${builddir}/python \
-                && env BUILDLIBDIR=${abs_top_builddir}/src/.libs \
-                  $(PYTHON) ${abs_srcdir}/python/setup.py install \
-                     --skip-build --root=$(DESTDIR)/// --prefix=$(prefix) \
-                     --exec-prefix=$(exec_prefix)) \
+	$(AM_V_GEN)test -f ${builddir}/python/dist/*.whl \
+           && ( $(PYTHON) -m pip install --upgrade --no-index --no-deps \
+                  --no-cache-dir --disable-pip-version-check \
+                  --target=$(DESTDIR)$(libdir)/python3/site-packages \
+                  ${builddir}/python/dist/*.whl ) \
            || true
 
 # rules for building the ruby module
@@ -62,19 +61,19 @@ ruby:
              ABS_TOP_BUILDDIR=${abs_top_builddir} \
              $(RUBY_MAKE_OPTIONS) RUBYARCHDIR= )
 
-# rules for building the python module
+# Build the python module as a wheel. It lands in ${builddir}/python/dist/
+# and is installed from there (via pip) by install-data-local. RRDTOOL_RPATH
+# tells setup.py to embed the install libdir as the extension's RPATH.
 python:
 	-mkdir -p ${builddir}/$@
 	cd ${builddir}/$@ \
 	  && ( test -e rrdtoolmodule.c || ln -s ${abs_srcdir}/$@/rrdtoolmodule.c ) \
+	  && rm -rf build dist rrdtool.egg-info \
           && env \
                ABS_TOP_SRCDIR=${abs_top_srcdir} \
                ABS_TOP_BUILDDIR=${abs_top_builddir} \
-               $(PYTHON) ${abs_srcdir}/$@/setup.py build_ext $(PYTHON_RPATH) \
-          && env \
-               ABS_TOP_SRCDIR=${abs_top_srcdir} \
-               ABS_TOP_BUILDDIR=${abs_top_builddir} \
-               $(PYTHON) ${abs_srcdir}/$@/setup.py build
+               RRDTOOL_RPATH=$(PYTHON_RPATH_LIBDIR) \
+               $(PYTHON) ${abs_srcdir}/$@/setup.py bdist_wheel
 
 # rules for building the perl module
 perl-piped:
@@ -119,5 +118,5 @@ clean-local:
           && cd ${builddir}/ruby \
           && ( $(MAKE) clean || true ) \
           && rm -f Makefile )
-	-rm -rf ${builddir}/python/build
+	-rm -rf ${builddir}/python/build ${builddir}/python/dist ${builddir}/python/rrdtool.egg-info
 ##END##

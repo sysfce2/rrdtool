@@ -15,12 +15,23 @@ package_version = '0.1.10'
 
 
 def main():
-    module = Extension('rrdtool',
-                       sources=['rrdtoolmodule.c'],
-                       library_dirs=[os.path.join(TOP_BUILDDIR, 'src', '.libs')],
-                       include_dirs=[os.path.join(TOP_BUILDDIR, 'src'),
-                                     os.path.join(TOP_SRCDIR, 'src')],
-                       libraries=['rrd'])
+    # rrdtool is built as part of the /opt/rrdtool bundle, where the extension
+    # must locate librrd at runtime through an embedded RPATH. The autotools
+    # build passes the install libdir via the RRDTOOL_RPATH environment
+    # variable. When this package is built by other means (a plain
+    # `pip install`), the variable is simply unset and no RPATH is embedded.
+    ext_kwargs = dict(
+        sources=['rrdtoolmodule.c'],
+        library_dirs=[os.path.join(TOP_BUILDDIR, 'src', '.libs')],
+        include_dirs=[os.path.join(TOP_BUILDDIR, 'src'),
+                      os.path.join(TOP_SRCDIR, 'src')],
+        libraries=['rrd'],
+    )
+    rpath = os.environ.get('RRDTOOL_RPATH', '')
+    if rpath:
+        ext_kwargs['runtime_library_dirs'] = [rpath]
+
+    module = Extension('rrdtool', **ext_kwargs)
 
     kwargs = dict(
         name='rrdtool',

@@ -44,7 +44,7 @@ BuildRequires:  freetype-devel, libpng-devel, zlib-devel
 BuildRequires:  libxml2-devel, glib2-devel, libdbi-devel
 # binding build-deps
 BuildRequires:  perl-devel, perl-ExtUtils-MakeMaker
-BuildRequires:  python3-devel
+BuildRequires:  python3-devel, python3-setuptools, python3-pip, python3-wheel
 BuildRequires:  tcl-devel
 BuildRequires:  lua-devel
 BuildRequires:  ruby, ruby-devel

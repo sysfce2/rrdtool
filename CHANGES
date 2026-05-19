@@ -4,6 +4,7 @@ RRDtool - master ...
 Bugfixes
 --------
 * The Linux .deb packages were missing the Lua language binding @oetiker
+* The Python binding is now installed with pip into a consistent, distribution-independent location @oetiker
 
 Features
 --------
