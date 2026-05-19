@@ -6,6 +6,7 @@ Bugfixes
 
 Features
 --------
+* Add more DEB and RPM package variants: Ubuntu 26.04, Debian 13, AlmaLinux 8/10, Fedora @oetiker
 
 RRDtool 1.10.0 - 2026-05-19
 ===========================
