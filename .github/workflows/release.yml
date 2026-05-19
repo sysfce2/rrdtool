@@ -402,9 +402,15 @@ jobs:
           - image: ubuntu:24.04
             tag: ubuntu-24.04
             distro_tag: ubuntu24.04
+          - image: ubuntu:26.04
+            tag: ubuntu-26.04
+            distro_tag: ubuntu26.04
           - image: debian:12
             tag: debian-12
             distro_tag: debian12
+          - image: debian:13
+            tag: debian-13
+            distro_tag: debian13
     container:
       image: ${{ matrix.image }}
     env:
