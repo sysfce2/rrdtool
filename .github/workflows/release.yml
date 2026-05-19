@@ -437,9 +437,17 @@ jobs:
               libperl-dev \
               python3-dev python3-setuptools \
               tcl-dev \
-              liblua5.1-0-dev \
+              lua5.4 liblua5.4-dev \
               ruby ruby-dev rubygems-integration
           gem install --no-document fpm
+          # configure.ac finds Lua via AC_PATH_PROG(LUA, lua) and only trusts
+          # the pkg-config flags when prefix/bin/lua equals $LUA. Debian ships
+          # the interpreter as the versioned `lua5.4` with no unversioned
+          # `lua`, so without this symlink configure silently skips the Lua
+          # binding (LUA=no) and the .deb ships without it. The symlink must
+          # be exactly /usr/bin/lua: lua5.4.pc has prefix=/usr, so configure
+          # compares against /usr/bin/lua before using `pkg-config --cflags`.
+          ln -sf lua5.4 /usr/bin/lua
 
       - name: Bump version in working tree
         uses: ./.github/actions/bump-version
@@ -461,6 +469,27 @@ jobs:
               --with-pic
           make
           make install DESTDIR="$PWD/stage"
+
+      # configure skips a binding silently (no build error) when its toolchain
+      # is missing — that is exactly how the Lua binding went missing from
+      # earlier .deb releases. Assert each compiled binding landed in the stage
+      # tree so a regression fails the release instead of shipping quietly.
+      # Ruby is checked separately below: it escapes /opt and is relocated next.
+      - name: Verify language bindings were built
+        run: |
+          set -e
+          check() {
+            local name="$1"; shift
+            if [ -z "$(find stage/opt -type f "$@" 2>/dev/null | head -1)" ]; then
+              echo "::error::$name binding missing from staged tree"
+              exit 1
+            fi
+            echo "ok: $name binding staged"
+          }
+          check Perl   -name RRDs.so
+          check Python -name 'rrdtool*.so' -path '*python*'
+          check Tcl    -name 'tclrrd*.so'
+          check Lua    -name 'rrd.so*' -path '*lua*'
 
       # Ruby's mkmf installs the compiled extension into the interpreter's
       # own sitearchdir (/usr/local/lib/<arch>/site_ruby), ignoring our

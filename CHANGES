@@ -3,6 +3,7 @@ RRDtool - master ...
 ====================
 Bugfixes
 --------
+* The Linux .deb packages were missing the Lua language binding @oetiker
 
 Features
 --------
