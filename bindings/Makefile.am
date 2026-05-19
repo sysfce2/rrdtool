@@ -61,19 +61,26 @@ ruby:
              ABS_TOP_BUILDDIR=${abs_top_builddir} \
              $(RUBY_MAKE_OPTIONS) RUBYARCHDIR= )
 
-# Build the python module as a wheel. It lands in ${builddir}/python/dist/
-# and is installed from there (via pip) by install-data-local. RRDTOOL_RPATH
-# tells setup.py to embed the install libdir as the extension's RPATH.
-python:
-	-mkdir -p ${builddir}/$@
-	cd ${builddir}/$@ \
-	  && ( test -e rrdtoolmodule.c || ln -s ${abs_srcdir}/$@/rrdtoolmodule.c ) \
-	  && rm -rf build dist rrdtool.egg-info \
+# Build the python module as a wheel in ${builddir}/python/dist/; it is
+# installed from there (via pip) by install-data-local. The wheel.stamp
+# target gives the build real dependency tracking, so re-running `all`
+# -- which `make install` and `make check` both do -- rebuilds the wheel
+# only when a source actually changed. That also stops a `sudo make
+# install` from leaving root-owned build artifacts that a later non-root
+# `make` cannot remove. RRDTOOL_RPATH tells setup.py to embed the
+# install libdir as the extension's RPATH.
+python: ${builddir}/python/wheel.stamp
+
+${builddir}/python/wheel.stamp: ${abs_srcdir}/python/rrdtoolmodule.c ${abs_srcdir}/python/setup.py
+	-mkdir -p ${builddir}/python
+	cd ${builddir}/python \
+	  && ( test -e rrdtoolmodule.c || ln -s ${abs_srcdir}/python/rrdtoolmodule.c ) \
           && env \
                ABS_TOP_SRCDIR=${abs_top_srcdir} \
                ABS_TOP_BUILDDIR=${abs_top_builddir} \
                RRDTOOL_RPATH=$(PYTHON_RPATH_LIBDIR) \
-               $(PYTHON) ${abs_srcdir}/$@/setup.py bdist_wheel
+               $(PYTHON) ${abs_srcdir}/python/setup.py bdist_wheel
+	touch $@
 
 # rules for building the perl module
 perl-piped:
@@ -118,5 +125,5 @@ clean-local:
           && cd ${builddir}/ruby \
           && ( $(MAKE) clean || true ) \
           && rm -f Makefile )
-	-rm -rf ${builddir}/python/build ${builddir}/python/dist ${builddir}/python/rrdtool.egg-info
+	-rm -rf ${builddir}/python/build ${builddir}/python/dist ${builddir}/python/rrdtool.egg-info ${builddir}/python/wheel.stamp
 ##END##
