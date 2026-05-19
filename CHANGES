@@ -6,6 +6,7 @@ Bugfixes
 
 Features
 --------
+* RPM releases now ship matching debuginfo and debugsource packages @oetiker
 
 RRDtool 1.10.1 - 2026-05-19
 ===========================

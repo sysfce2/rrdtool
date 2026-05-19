@@ -340,14 +340,16 @@ jobs:
           set -e
           rpmbuild -ba ~/rpmbuild/SPECS/rrdtool-opt.spec
 
-      - name: Collect built rpm
-        env:
-          VERSION: ${{ needs.compute-version.outputs.version }}
+      - name: Collect built rpms
         run: |
           set -e
           mkdir -p out
-          # Copy only the binary rpm (not the src.rpm — design says binaries only)
-          cp ~/rpmbuild/RPMS/x86_64/rrdtool-1-opt-${VERSION}-*.rpm out/
+          # Ship every binary rpm rpmbuild produced: the main package plus the
+          # -debuginfo / -debugsource packages (generated because configure's
+          # default CFLAGS carry -g, so find-debuginfo has symbols to extract).
+          # The .src.rpm is intentionally excluded — it lives under
+          # ~/rpmbuild/SRPMS, not RPMS/x86_64, so this glob never matches it.
+          cp ~/rpmbuild/RPMS/x86_64/*.rpm out/
           ls -l out/
 
       - uses: actions/upload-artifact@v7
