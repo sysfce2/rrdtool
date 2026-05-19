@@ -367,7 +367,7 @@ int main(void){
     if (! rrdinf > 0) {printf ("not inf > 0 ... "); return 1;}
     if (! -rrdinf < 0) {printf ("not -inf < 0 ... "); return 1;}
     return 0;
- }]])],[rd_cv_ieee_$2=yes],[rd_cv_ieee_$2=no],[$as_echo_n "(skipped ... cross-compiling) " >&6
+ }]])],[rd_cv_ieee_$2=yes],[rd_cv_ieee_$2=no],[AS_ECHO_N(["(skipped ... cross-compiling) "]) >&6
   # Bypass further checks
   rd_cv_ieee_works=yes])])
 dnl these we run regardless is cached or not
@@ -441,7 +441,7 @@ AC_SUBST(PYTHON_INCLUDES)
 dnl check if the headers exist:
 save_CPPFLAGS="$CPPFLAGS"
 CPPFLAGS="$CPPFLAGS $PYTHON_INCLUDES"
-AC_TRY_CPP([#include <Python.h>],dnl
+AC_PREPROC_IFELSE([AC_LANG_SOURCE([[#include <Python.h>]])],dnl
 [AC_MSG_RESULT(found)
 $1],dnl
 [AC_MSG_RESULT(not found)
@@ -582,29 +582,29 @@ AC_DEFUN([GC_TIMEZONE], [
         AC_REQUIRE([AC_STRUCT_TM])
         AC_CACHE_CHECK([tm_gmtoff in struct tm], gq_cv_have_tm_gmtoff,
                 gq_cv_have_tm_gmtoff=no
-                AC_TRY_COMPILE([#include <stdlib.h>
+                AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <stdlib.h>
                                 #include <time.h>
                                 #include <$ac_cv_struct_tm>
-                                ],
-                               [struct tm t;
+                                ]],
+                               [[struct tm t;
                                 t.tm_gmtoff = 0;
                                 exit(0);
-                                ],
-                               gq_cv_have_tm_gmtoff=yes
+                                ]])],
+                               [gq_cv_have_tm_gmtoff=yes]
                         )
         )
 
         AC_CACHE_CHECK([__tm_gmtoff in struct tm], gq_cv_have___tm_gmtoff,
                 gq_cv_have___tm_gmtoff=no
-                AC_TRY_COMPILE([#include <stdlib.h>
+                AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <stdlib.h>
                                 #include <time.h>
                                 #include <$ac_cv_struct_tm>
-                                ],
-                               [struct tm t;
+                                ]],
+                               [[struct tm t;
                                 t.__tm_gmtoff = 0;
                                 exit(0);
-                                ],
-                               gq_cv_have___tm_gmtoff=yes
+                                ]])],
+                               [gq_cv_have___tm_gmtoff=yes]
                         )
         )
 
@@ -616,13 +616,13 @@ AC_DEFUN([GC_TIMEZONE], [
                 AC_DEFINE(TM_GMTOFF, __tm_gmtoff)
         else
                 AC_CACHE_CHECK(for timezone, ac_cv_var_timezone,
-                               [AC_TRY_LINK([
+                               [AC_LINK_IFELSE([AC_LANG_PROGRAM([[
                                              #include <time.h>
                                              extern long int timezone;
-                                ],
-                               [long int l = timezone;], 
-                                ac_cv_var_timezone=yes, 
-                                ac_cv_var_timezone=no)])
+                                ]],
+                               [[long int l = timezone;]])],
+                                [ac_cv_var_timezone=yes],
+                                [ac_cv_var_timezone=no])])
                 if test $ac_cv_var_timezone = yes; then
                         AC_DEFINE(HAVE_TIMEZONE,1,[is there an external timezone variable instead ?])
                 fi
