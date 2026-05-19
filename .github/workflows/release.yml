@@ -250,8 +250,22 @@ jobs:
       fail-fast: true
       matrix:
         include:
+          - image: almalinux:8
+            tag: almalinux-8
+            needs_epel: true
+            crb_repo: powertools
           - image: almalinux:9
             tag: almalinux-9
+            needs_epel: true
+            crb_repo: crb
+          - image: almalinux:10
+            tag: almalinux-10
+            needs_epel: true
+            crb_repo: crb
+          - image: fedora:latest
+            tag: fedora
+            needs_epel: false
+            crb_repo: ''
     container:
       image: ${{ matrix.image }}
     steps:
@@ -263,11 +277,21 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Install build deps
+        env:
+          NEEDS_EPEL: ${{ matrix.needs_epel }}
+          CRB_REPO: ${{ matrix.crb_repo }}
         run: |
           set -e
-          dnf install -y epel-release
-          dnf install -y 'dnf-command(config-manager)' || true
-          dnf config-manager --set-enabled crb || true
+          # Fedora carries every -devel package in its base repo; EL needs EPEL.
+          if [ "$NEEDS_EPEL" = "true" ]; then
+            dnf install -y epel-release
+          fi
+          # CRB/PowerTools repo: 'crb' on EL9/EL10, 'powertools' on EL8, none
+          # on Fedora. Name comes from the matrix so a real failure is visible.
+          if [ -n "$CRB_REPO" ]; then
+            dnf install -y 'dnf-command(config-manager)' || true
+            dnf config-manager --set-enabled "$CRB_REPO"
+          fi
           dnf install -y \
               rpm-build rpmdevtools \
               gcc make autoconf automake libtool pkgconfig \
