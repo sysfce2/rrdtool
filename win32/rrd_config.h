@@ -9,9 +9,9 @@
 /* Version numbers are updated by the rrdtool-release script. */
 #define PACKAGE_MAJOR       1
 #define PACKAGE_MINOR       10
-#define PACKAGE_REVISION    1
-#define PACKAGE_VERSION     "1.10.1"
-#define NUMVERS             1.10001
+#define PACKAGE_REVISION    2
+#define PACKAGE_VERSION     "1.10.2"
+#define NUMVERS             1.10002
 
 #define RRD_DEFAULT_FONT "Courier"
 
