@@ -3,6 +3,7 @@ RRDtool - master ...
 ====================
 Bugfixes
 --------
+* Modernize obsolete autoconf macros so configure regenerates cleanly with current autotools @oetiker
 
 Features
 --------
