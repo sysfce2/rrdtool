@@ -3,6 +3,14 @@ RRDtool - master ...
 ====================
 Bugfixes
 --------
+
+Features
+--------
+
+RRDtool 1.10.3 - 2026-05-25
+===========================
+Bugfixes
+--------
 - add missing cairo dependency for ubuntu package @peejaychilds
 
 Features
