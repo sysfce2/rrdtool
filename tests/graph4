@@ -1,0 +1,51 @@
+#!/bin/bash
+
+. $(dirname $0)/functions
+
+if [ -n "$MSYSTEM" ]; then
+    BUILD=graph4
+else
+    BUILD=$BUILDDIR/graph4
+fi
+
+# Issue #1326: With Y-axis values in the 10G+ range and a tall graph,
+# the gridstep becomes fractional (e.g. 0.1 G) after SI scaling, but the
+# legacy formatter chose %4.0f whenever MaxY >= 10, rounding 10.2, 10.4,
+# 10.6 all to "10" and producing duplicate Y-axis labels.
+
+$RRDTOOL create ${BUILD}.rrd \
+    --start 1748087640 --step 60 \
+    DS:value:GAUGE:120:U:U \
+    RRA:AVERAGE:0.5:1:60
+report "create"
+
+is_cached && exit 0
+
+# Populate with 10.1G .. 11.5G in 0.1G increments
+for i in $(seq 1 15); do
+    t=$((1748087640 + i*60))
+    v=$(awk -v i="$i" 'BEGIN { printf "%.0f", 10e9 + i*1e8 }')
+    $RRDTOOL update ${BUILD}.rrd ${t}:${v}
+done
+report "update"
+
+# Generate a tall graph so the autoscaler picks a small gridstep
+$RRDTOOL graph ${BUILD}.pdf --imgformat PDF \
+    --start 1748087700 --end 1748088600 --height 1000 \
+    DEF:v=${BUILD}.rrd:value:AVERAGE \
+    LINE1:v#000000 > /dev/null
+report "graph"
+
+# If pdftotext is available, verify Y-axis labels are unique
+if command -v pdftotext > /dev/null; then
+    LABELS=$(pdftotext ${BUILD}.pdf - | grep -E '^[0-9]+\.[0-9]+ G$')
+    UNIQUE=$(echo "$LABELS" | sort -u | wc -l)
+    TOTAL=$(echo "$LABELS" | wc -l)
+    if [ "$UNIQUE" = "$TOTAL" ] && [ "$TOTAL" -ge 10 ]; then
+        ok "Y-axis labels are unique ($TOTAL distinct labels)"
+    else
+        fail 1 "Y-axis labels are duplicated (got $UNIQUE distinct out of $TOTAL)"
+    fi
+else
+    ok "pdftotext not available, skipping label uniqueness check"
+fi

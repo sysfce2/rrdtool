@@ -2412,6 +2412,12 @@ int calc_horizontal_grid(
                          (im->symbol != ' ' ? " %c" : ""));
             }
         } else {        /* classic rrd grid */
+            double    grid_scaled;
+            double    label_step;
+            double    maxabs;
+            int       int_digits;
+            int       needed;
+
             for (i = 0; ylab[i].grid > 0; i++) {
                 pixel = im->ysize / (scaledrange / ylab[i].grid);
                 gridind = i;
@@ -2428,6 +2434,35 @@ int calc_horizontal_grid(
             }
 
             im->ygrid_scale.gridstep = ylab[gridind].grid * im->magfact;
+
+            /* If the label step is sub-integer, draw_horizontal_grid will
+             * format labels with one fractional digit (%4.1f) to keep
+             * neighbouring labels distinct (issue #1326). Make sure the
+             * vertical label column is wide enough to hold them. */
+            grid_scaled = ylab[gridind].grid * im->viewfactor;
+            label_step = grid_scaled * (double) im->ygrid_scale.labfact;
+            maxabs = max(fabs(im->maxval), fabs(im->minval))
+                     * im->viewfactor / im->magfact;
+            if (maxabs < 10) {
+                int_digits = 1;
+            } else {
+                int_digits = (int) ceil(log10(maxabs + 0.5));
+            }
+            if (label_step < 1 || maxabs < 10) {
+                /* digits + '.' + 1 fractional digit */
+                needed = int_digits + 2;
+            } else {
+                needed = int_digits;
+            }
+            if (im->minval < 0) {
+                needed += 1;       /* sign */
+            }
+            if (im->symbol != ' ') {
+                needed += 2;       /* " <SI>" suffix */
+            }
+            if (im->unitslength < needed) {
+                im->unitslength = needed;
+            }
         }
     } else {
         im->ygrid_scale.gridstep = im->ygridstep;
@@ -2480,7 +2515,9 @@ int draw_horizontal_grid(
                                          im->ygrid_scale.labfmt,
                                          scaledstep * (double) i);
                             } else {
-                                if (MaxY < 10) {
+                                if (MaxY < 10
+                                    || scaledstep *
+                                       (double) im->ygrid_scale.labfact < 1) {
                                     snprintf(graph_label, sizeof graph_label,
                                              "%4.1f",
                                              scaledstep * (double) i);
@@ -2505,7 +2542,9 @@ int draw_horizontal_grid(
                                          im->ygrid_scale.labfmt,
                                          scaledstep * (double) i, sisym);
                             } else {
-                                if (MaxY < 10) {
+                                if (MaxY < 10
+                                    || scaledstep *
+                                       (double) im->ygrid_scale.labfact < 1) {
                                     snprintf(graph_label, sizeof graph_label,
                                              "%4.1f %c",
                                              scaledstep * (double) i, sisym);
@@ -2586,14 +2625,24 @@ int draw_horizontal_grid(
                             }
                             sval /= second_axis_magfact;
 
-                            if (MaxY < 10) {
-                                snprintf(graph_label_right,
-                                         sizeof graph_label_right, "%5.1f %s",
-                                         sval, second_axis_symb);
-                            } else {
-                                snprintf(graph_label_right,
-                                         sizeof graph_label_right, "%5.0f %s",
-                                         sval, second_axis_symb);
+                            {
+                                double    right_step =
+                                    im->ygrid_scale.gridstep *
+                                    im->second_axis_scale /
+                                    second_axis_magfact *
+                                    (double) im->ygrid_scale.labfact;
+
+                                if (MaxY < 10 || fabs(right_step) < 1) {
+                                    snprintf(graph_label_right,
+                                             sizeof graph_label_right,
+                                             "%5.1f %s", sval,
+                                             second_axis_symb);
+                                } else {
+                                    snprintf(graph_label_right,
+                                             sizeof graph_label_right,
+                                             "%5.0f %s", sval,
+                                             second_axis_symb);
+                                }
                             }
                         } else {
                             snprintf(graph_label_right,

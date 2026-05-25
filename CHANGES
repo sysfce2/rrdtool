@@ -3,6 +3,10 @@ RRDtool - master ...
 ====================
 Bugfixes
 --------
+* Y-axis labels keep enough fractional precision when the gridstep is
+  fractional after SI scaling (e.g. values around 10G+), avoiding
+  duplicate labels on tall graphs. Issue #1326 reported by @muusik,
+  fixed by @oetiker
 
 Features
 --------
