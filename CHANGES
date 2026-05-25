@@ -3,6 +3,7 @@ RRDtool - master ...
 ====================
 Bugfixes
 --------
+- add missing cairo dependency for ubuntu package @peejaychilds
 
 Features
 --------
