@@ -546,6 +546,7 @@ jobs:
               --description "Round Robin Database Tool (upstream /opt build). Source /opt/rrdtool/bin/rrdtool-env.sh to use." \
               --depends "libcairo2" \
               --depends "libpango-1.0-0" \
+              --depends "libpangocairo-1.0-0" \
               --depends "libxml2-16 | libxml2" \
               --depends "libpng16-16" \
               --depends "libfreetype6" \
