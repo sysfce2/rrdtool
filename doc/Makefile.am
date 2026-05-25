@@ -71,7 +71,7 @@ all-local: link man txt html-local
 	$(AM_V_GEN)@POD2MAN@ --release=$(VERSION) --center=rrdtool --section=3 $< > $@
 
 .1.txt .3.txt:
-	$(AM_V_GEN)GROFF_NO_SGR=1 @NROFF@ -man -Tlp -Wbreak $< > $@
+	$(AM_V_GEN)GROFF_NO_SGR=1 @NROFF@ -man -Tlp @NROFF_WBREAK@ $< > $@
 
 .1.pdf .3.pdf:
 	$(AM_V_GEN)@TROFF@ -man $< | ps2pdf - $@

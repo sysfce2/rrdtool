@@ -1038,6 +1038,17 @@ AC_PATH_PROGS(NROFF, [gnroff nroff])
 if test x$NROFF = x; then
   AC_MSG_ERROR([I need a copy of *nroff to format the documentation])
 fi
+dnl -Wbreak is a GNU groff extension used to silence "can't break line"
+dnl warnings; BSD-derived nroff (e.g. macOS /usr/bin/nroff) rejects it.
+AC_MSG_CHECKING([whether $NROFF supports -Wbreak])
+if $NROFF -man -Wbreak /dev/null >/dev/null 2>&1; then
+  NROFF_WBREAK="-Wbreak"
+  AC_MSG_RESULT([yes])
+else
+  NROFF_WBREAK=""
+  AC_MSG_RESULT([no])
+fi
+AC_SUBST(NROFF_WBREAK)
 AC_ARG_VAR(TROFF, [path to the local troff version])
 AC_PATH_PROGS(TROFF, [groff troff])
 if test x$TROFF = x; then

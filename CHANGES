@@ -7,6 +7,10 @@ Bugfixes
   fractional after SI scaling (e.g. values around 10G+), avoiding
   duplicate labels on tall graphs. Issue #1326 reported by @muusik,
   fixed by @oetiker
+* Detect nroff support for -Wbreak at configure time, so building the
+  text documentation works on systems with BSD-derived nroff (e.g.
+  macOS /usr/bin/nroff). Issue #1323 reported by @gigaimage, fixed by
+  @oetiker
 
 Features
 --------
