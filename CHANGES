@@ -11,6 +11,15 @@ Bugfixes
   initialising `stroff = 0` so a partial match safely falls through to
   the existing "invalid x-grid format" error path. Issue #1291
   reported by @anvilvapre, fixed by @oetiker
+* Fix a 1-byte heap buffer overflow in `checkUnusedValues()` that
+  triggered `*** buffer overflow detected ***` SIGABRT under glibc
+  fortified `strcat()` when reporting unused graph arguments. The
+  function under-allocated by one byte and silently relied on that
+  overflow to make its trailing `:` strip land on the right index.
+  Refactored to size buffers correctly and prepend the separator
+  rather than build-then-strip, so the two no longer have to agree.
+  Reported and original fix attempt in PR #1329 by @ppisar,
+  refactored fix by @oetiker
 * Pad the Perl `$RRDs::VERSION` / `$RRDp::VERSION` numeric encoding so
   two-digit minor releases compare monotonically. The numeric version
   now uses three-digit zero-padded minor and patch fields, e.g.
