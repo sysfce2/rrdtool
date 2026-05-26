@@ -3,6 +3,19 @@ RRDtool - master ...
 ====================
 Bugfixes
 --------
+* Fix segfault when `--x-grid` is given without a trailing date-format
+  field. The `%n` conversion in `sscanf()` is not counted in its return
+  value, so `stroff` remained uninitialized when the input ended before
+  the final `:` separator; the subsequent `stroff != 0` guard read
+  garbage and could branch into `strdup()` with a bogus offset. Fixed by
+  initialising `stroff = 0` so a partial match safely falls through to
+  the existing "invalid x-grid format" error path. Issue #1291
+  reported by @anvilvapre, fixed by @oetiker
+* libdbi /derive now returns 0 instead of NaN when the underlying
+  counter is constant (zero delta). Previously the strict `d_value > 0`
+  guard skipped zero deltas the same way it skips negative ones (counter
+  resets). Changed to `d_value >= 0`. Issue #550 reported by
+  @bitionaire, fix by @oetiker.
 * Fix a 1-byte heap buffer overflow in `checkUnusedValues()` that
   triggered `*** buffer overflow detected ***` SIGABRT under glibc
   fortified `strcat()` when reporting unused graph arguments. The
