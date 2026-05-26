@@ -3,6 +3,14 @@ RRDtool - master ...
 ====================
 Bugfixes
 --------
+* Fix segfault when `--x-grid` is given without a trailing date-format
+  field. The `%n` conversion in `sscanf()` is not counted in its return
+  value, so `stroff` remained uninitialized when the input ended before
+  the final `:` separator; the subsequent `stroff != 0` guard read
+  garbage and could branch into `strdup()` with a bogus offset. Fixed by
+  initialising `stroff = 0` so a partial match safely falls through to
+  the existing "invalid x-grid format" error path. Issue #1291
+  reported by @anvilvapre, fixed by @oetiker
 * Pad the Perl `$RRDs::VERSION` / `$RRDp::VERSION` numeric encoding so
   two-digit minor releases compare monotonically. The numeric version
   now uses three-digit zero-padded minor and patch fields, e.g.
