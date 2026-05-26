@@ -24,7 +24,10 @@ case "$VERSION" in
         ;;
 esac
 
-NUMVERS=$(printf '%s\n' "$VERSION" | perl -n -e 'my @x=split /\./;printf "%d.%d%03d", @x')
+# Format the numeric version with three-digit zero-padded minor and patch
+# so that comparison as a Perl decimal stays monotonic for two-digit minor
+# releases (e.g. 1.009000 < 1.010000 < 1.010003).
+NUMVERS=$(printf '%s\n' "$VERSION" | perl -n -e 'my @x=split /\./;printf "%d.%03d%03d", @x')
 CURRENT_YEAR=$(date +"%Y")
 
 set -x

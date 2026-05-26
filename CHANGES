@@ -3,6 +3,17 @@ RRDtool - master ...
 ====================
 Bugfixes
 --------
+* Pad the Perl `$RRDs::VERSION` / `$RRDp::VERSION` numeric encoding so
+  two-digit minor releases compare monotonically. The numeric version
+  now uses three-digit zero-padded minor and patch fields, e.g.
+  1.10.3 -> 1.010003 (previously 1.10003, which was numerically less
+  than 1.9.0 -> 1.9000). The same encoding is now used by `NUMVERS`
+  in `configure.ac` and `win32/rrd_config.h`. Note: consumers that
+  previously tested `$RRDs::VERSION >= 1.2` need to update their
+  checks (use `>= 1.002` or compare against the X.Y.Z string via the
+  `version` pragma) -- this is unavoidable given the existing format
+  could not represent two-digit minors monotonically. Issue #1330
+  reported by @ppisar, fixed by @oetiker
 * Y-axis labels keep enough fractional precision when the gridstep is
   fractional after SI scaling (e.g. values around 10G+), avoiding
   duplicate labels on tall graphs. Issue #1326 reported by @muusik,
