@@ -120,7 +120,7 @@ char     *checkUnusedValues(
     parsedargs_t *pa)
 {
     char     *res = NULL;
-    size_t    len = 0;
+    size_t    len = 1;
 
     for (int i = 0; i < pa->kv_cnt; i++) {
         if (!pa->kv_args[i].flag) {
