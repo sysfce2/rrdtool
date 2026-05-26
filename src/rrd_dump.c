@@ -127,7 +127,7 @@ int rrd_dump_cb_r(
 
 #ifdef HAVE_STRFTIME
     localtime_r(&rrd.live_head->last_up, &tm);
-    strftime(somestring, 255, "%Y-%m-%d %H:%M:%S %Z", &tm);
+    strftime(somestring, 255, "%Y-%m-%d %H:%M:%S %z", &tm);
 #else
 # error "Need strftime"
 #endif
@@ -426,7 +426,7 @@ int rrd_dump_cb_r(
             timer++;
 #ifdef HAVE_STRFTIME
             localtime_r(&now, &tm);
-            strftime(somestring, 255, "%Y-%m-%d %H:%M:%S %Z", &tm);
+            strftime(somestring, 255, "%Y-%m-%d %H:%M:%S %z", &tm);
 #else
 # error "Need strftime"
 #endif

@@ -3,6 +3,15 @@ RRDtool - master ...
 ====================
 Bugfixes
 --------
+* `rrdtool dump` now uses a numeric UTC offset (`%z`, e.g. `+0900`) instead
+  of the locale timezone name (`%Z`) in XML comments. Locale timezone names
+  can be encoded in a non-UTF-8 encoding (e.g. CJK locales), which breaks
+  the XML declaration and causes `rrdtool restore` to fail with
+  "Input is not proper UTF-8". The numeric offset is always ASCII.
+  Note: existing dump files already containing locale timezone names remain
+  valid XML as long as their encoding matches; newly created dumps will
+  always contain pure ASCII in these comments. Issue #1173
+  reported by @k79e, fix by @oetiker.
 * Pad the Perl `$RRDs::VERSION` / `$RRDp::VERSION` numeric encoding so
   two-digit minor releases compare monotonically. The numeric version
   now uses three-digit zero-padded minor and patch fields, e.g.
