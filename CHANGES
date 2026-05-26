@@ -3,6 +3,11 @@ RRDtool - master ...
 ====================
 Bugfixes
 --------
+* libdbi /derive now returns 0 instead of NaN when the underlying
+  counter is constant (zero delta). Previously the strict `d_value > 0`
+  guard skipped zero deltas the same way it skips negative ones (counter
+  resets). Changed to `d_value >= 0`. Issue #550 reported by
+  @bitionaire, fix by @oetiker.
 * Pad the Perl `$RRDs::VERSION` / `$RRDp::VERSION` numeric encoding so
   two-digit minor releases compare monotonically. The numeric version
   now uses three-digit zero-padded minor and patch fields, e.g.
