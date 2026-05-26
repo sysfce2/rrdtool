@@ -22,6 +22,12 @@ Bugfixes
   text documentation works on systems with BSD-derived nroff (e.g.
   macOS /usr/bin/nroff). Issue #1323 reported by @gigaimage, fixed by
   @oetiker
+* Fix SIGFPE divide-by-zero crash in `rrdtool dump` when processing
+  fuzz-crafted RRD files that contain an RRA with `pdp_cnt` or
+  `pdp_step` equal to zero. The modulo operation at the heart of the
+  timestamp calculation is now guarded: such files are rejected with
+  a descriptive error message instead of crashing.
+  Issue #783 reported by @rwhitworth, fix by @oetiker.
 
 Features
 --------
