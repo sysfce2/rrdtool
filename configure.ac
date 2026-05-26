@@ -683,11 +683,10 @@ AC_PATH_PROG(POD2MAN, pod2man, no)
 AC_PATH_PROG(POD2HTML, pod2html, no)
 
 dnl for testing a numerical version number comes handy
-dnl the released version are
-dnl a.bccc
-dnl the devel versions will be something like
-dnl a.b999yymmddhh
-NUMVERS=m4_esyscmd([perl -ne 'my @x=split /\./;printf "%d.%d%03d", @x' VERSION])
+dnl the released versions encode as a.bbbccc with three-digit zero-padded
+dnl minor and patch fields so the value stays monotonic for two-digit
+dnl minor releases (1.009000 < 1.010000 < 1.010003).
+NUMVERS=m4_esyscmd([perl -ne 'my @x=split /\./;printf "%d.%03d%03d", @x' VERSION])
 AC_SUBST(NUMVERS)
 
 AC_ARG_ENABLE(perl,AS_HELP_STRING([--disable-perl],[do not build the perl modules]),

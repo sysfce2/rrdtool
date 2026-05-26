@@ -11,7 +11,7 @@
 #define PACKAGE_MINOR       10
 #define PACKAGE_REVISION    3
 #define PACKAGE_VERSION     "1.10.3"
-#define NUMVERS             1.10003
+#define NUMVERS             1.010003
 
 #define RRD_DEFAULT_FONT "Courier"
 
