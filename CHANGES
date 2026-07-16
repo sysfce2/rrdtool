@@ -3,6 +3,7 @@ RRDtool - master ...
 ====================
 Bugfixes
 --------
+* hardening: size the rrd_diff scratch buffer for its largest input @somethingwithproof
 * `rrdtool dump` now uses a numeric UTC offset (`%z`, e.g. `+0900`) instead
   of the locale timezone name (`%Z`) in XML comments. Locale timezone names
   can be encoded in a non-UTF-8 encoding (e.g. CJK locales), which breaks
