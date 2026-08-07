@@ -63,6 +63,17 @@ Bugfixes
 
 Features
 --------
+* rrdgraph: new --vertical-label-angle and --right-axis-label-angle options
+  to rotate the two y axis legends independently at run time. The compile
+  time RRDGRAPH_YLEGEND_ANGLE remains the default for both, so existing
+  graphs are unchanged. Use --right-axis-label-angle 270 to have the right
+  hand legend read from the top down. Suggested by @blappm in #1377,
+  implemented by @oetiker
+* rrdgraph: new --right-axis-range min:max option to suppress right axis
+  labels outside the given range, so a bounded right axis is no longer
+  labelled with values it cannot reach when the left axis range does not
+  line up. Either end may be left empty for unbounded. Suggested by @blappm
+  in #1377, implemented by @oetiker
 
 RRDtool 1.10.3 - 2026-05-25
 ===========================
